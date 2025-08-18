@@ -21,7 +21,7 @@ def get_acc_list(bio_project_name, verbose_print):
 
 
 def download(dataset_name, data_type, acc_list, verbose, specific_location,as_single, 
-              threads: int = 8, pathways: str = "no"):
+              threads: int = 8, pathways: str = "no", clean: bool = False):
     
     verbose_print = print if verbose else lambda *a, **k: None
     as_single= True if as_single else False
@@ -36,8 +36,9 @@ def download(dataset_name, data_type, acc_list, verbose, specific_location,as_si
         acc_list_path = get_acc_list(dataset_name, verbose_print)
     else:
         acc_list_path=get_project_list(dataset_name,acc_list_path, verbose_print)
+    
     visualization(acc_list_path, dataset_name, data_type, verbose_print, specific_location,as_single, 
-                   threads=threads, pathways=pathways)
+                   threads=threads, pathways=pathways, clean=clean)
 
 
 def get_project_list(bio_project_name, acc_list_path, verbose_print):
@@ -55,20 +56,20 @@ def get_project_list(bio_project_name, acc_list_path, verbose_print):
     return f"{acc_list_path}"
 
 
-def continue_from(dataset_id,continue_path, data_type, verbose, specific_location, threads, pathways):
+def continue_from(dataset_id,continue_path, data_type, verbose, specific_location, threads, pathways, clean):
     verbose_print = print if verbose else lambda *a, **k: None
     verbose_print("\n")
     verbose_print(f"Continue downloading from {continue_path}.")
-    visualization_continue(dataset_id,continue_path, data_type, verbose_print, specific_location, threads=threads, pathways=pathways)
+    visualization_continue(dataset_id,continue_path, data_type, verbose_print, specific_location, 
+                           threads=threads, pathways=pathways, clean=clean)
 
     
-def continue_from_fastq(dataset_id, continue_path, data_type, verbose, specific_location, 
-                        threads, pathways):
+def continue_from_fastq(dataset_id, continue_path, data_type, verbose, specific_location, threads, pathways, clean):
     verbose_print = print if verbose else lambda *a, **k: None
     verbose_print("\n")
     verbose_print(f"Continue downloading from {continue_path}.")
     visualization_continue_fastq(dataset_id,continue_path, data_type, verbose_print, specific_location, 
-                                  threads=threads, pathways=pathways)
+                                  threads=threads, pathways=pathways, clean=clean)
 
 
 # This function is used to download the qiita data
@@ -84,3 +85,4 @@ def download_fastq(fastq_path,barcode_path,metadata_path,data_type, verbose):
     verbose_print("\n")
     verbose_print("download starts.")
     fastq_visualization(fastq_path,barcode_path, metadata_path, data_type, verbose_print)
+    

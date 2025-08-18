@@ -6,7 +6,7 @@
 - [Flags & Options](#flags--options)
 - [Output Structure](#output-structure)
 - [Downloading a project](#downloading-a-project)
-    - [Download from NCBI SRA](#download-from-ncbi-sra)
+    - [Download from NCBI SRA](#download-from-ncbi-sra)6
     - [Continue data downloading](#continue-data-downloading)
     - [Download from ENA](#download-from-ena)
     - [Download using fastq files](#download-using-fastq-files)
@@ -88,7 +88,17 @@ Install HUMAnN
 ```
 mamba install -c biobakery humann
 ```
-
+Install KneadData
+```
+mamba install --freeze-installed -y -c conda-forge -c bioconda \
+  kneaddata=0.12.3 bowtie2>=2.4 trimmomatic>=0.39 fastqc>=0.12 multiqc openjdk=11
+  #Optional check:
+  kneaddata --version
+bowtie2 --version
+trimmomatic -version
+fastqc -v
+multiqc --version
+```
 3. **Download & configure the MetaPhlAn database**
 ```
 metaphlan --install --bowtie2db /path/to/db --index mpa_v30_CHOCOPhlAn_201901
@@ -105,7 +115,43 @@ humann_config --update database_folders protein /path/to/db/uniref
 humann_config --update database_folders utility_mapping /path/to/db/utility_mapping
 ```
 
-5. **Install YaMAS**
+5. **Set KneadData database**
+```
+#Create a  database folder
+mkdir -p /path/to/kneaddb
+
+#Download host genome index for Bowtie2 via KneadData helper
+kneaddata_database --download human_genome bowtie2 /path/to/kneaddb
+
+#Inspect that files were created
+ls -l /path/to/kneaddb/human_genome | head
+```
+> To use a different host genome (e.g., mouse), replace in the download command:
+>```
+>kneaddata_database --download mouse bowtie2 /path/to/kneaddb
+>```
+
+```
+#Persist env var across activations (uses conda activate.d/deactivate.d hooks)
+ACT="$CONDA_PREFIX/etc/conda/activate.d"; DEACT="$CONDA_PREFIX/etc/conda/deactivate.d"
+mkdir -p "$ACT" "$DEACT"
+
+#On env activation – set DB path 
+printf 'export YAMAS_HOST_DB=/path/to/kneaddb/human_genome\n' > "$ACT/50-yamas-clean.sh"
+
+#On env deactivation – clean env var
+printf 'unset YAMAS_HOST_DB\n' > "$DEACT/50-yamas-clean.sh"
+
+#Reactivate to load hooks 
+conda deactivate
+conda activate /path/to/conda/envs/qiime2-2023.2
+
+# Verify the env var and files
+echo "$YAMAS_HOST_DB"     # Expected: /path/to/kneaddb/human_genome
+ls -l "$YAMAS_HOST_DB" | head
+```
+
+6. **Install YaMAS**
 ```
 pip install YMS
 ```
@@ -121,7 +167,9 @@ Arguments:
 If the environment is ready, you will need to run one more command.    
 If not, follow the output guidelines.  
 
-**You’re all set!**  
+**You’re all set!** 
+
+---
 
 ## Flags & Options
 | Flag | Description |
@@ -130,6 +178,7 @@ If not, follow the output guidelines.
 | `--type <16S/18S/Shotgun>` | Type of sequencing data |
 | `--as_single` | Treat paired-end reads as single-end |
 | `--pathways yes/no` | Enable HUMAnN for pathway profiling (Shotgun only) |
+| `--kneaddata yes/no` | Run KneadData for host removal and QC (Shotgun only) |
 | `--threads <N>` | Number of threads to use |
 | `--continue_from_fastq <ID> <PATH> <TYPE>` | Continue processing from an existing FASTQ folder |
 | `--continue_from <ID> <PATH> <TYPE>` | Continue processing from an existing dataset folder |
@@ -143,7 +192,10 @@ After running YaMAS, the project folder will contain:
 <PROJECT_ID>-<DATE>_<TIME>/
 │
 ├── sra/                # Raw SRA files
-├── fastq/              # FASTQ files 
+├── fastq_raw/       # Original FASTQ files (before any QC or host removal)
+├── fastq_clean/     # Clean FASTQ files (after KneadData, if enabled)
+├── fastq/           # Active FASTQ folder used for downstream steps (points to raw or clean)
+├── knead_out/       # KneadData logs and QC reports (if –kneaddata is set)
 ├── qza/                # QIIME2 artifacts (16S/18S)
 ├── vis/                # Visualization files
 ├── export/             # Exported tables and merged results
@@ -154,6 +206,9 @@ After running YaMAS, the project folder will contain:
 - `*_pathcoverage.tsv` – Pathway coverage per sample  
 - `*_pathabundance_stratified.tsv` – Stratified pathway abundance by species  
 
+**KneadData outputs include:**  
+- `fastq_clean/` – cleaned FASTQ files with host sequences removed  
+- `knead_out/` – logs (`*_kneaddata.log`) and QC reports (`*.fastqc.html`, `multiqc_report.html`)  
 ---
 
 ## Downloading a project
@@ -193,7 +248,7 @@ Arguments:
 - pathways: Generate HUMAnN pathways tables. choose: yes / no
 
 
-## Download from ENA
+## Download from ENA/Qiita
 ```
 yamas --qiita <preprocessed_fastq_path> <metadata_path> <data_type>
 ```

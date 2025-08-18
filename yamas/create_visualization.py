@@ -9,12 +9,16 @@ from metaphlan.utils.merge_metaphlan_tables import merge
 from .utilities import run_cmd, ReadsData, check_conda_qiime2
 import json
 import shutil
+from collections import Counter
 
 from .generate_pathways import run_humann_pipeline
 from pathlib import Path
 
-CONDA_PREFIX = os.environ.get("CONDA_PREFIX", None)
+from .generate_dehost import run_dehost_pipeline  
+from typing import Union
 
+
+CONDA_PREFIX = os.environ.get("CONDA_PREFIX", None)
 
 def check_input(acc_list: str):
     # flag = False
@@ -26,9 +30,7 @@ def check_input(acc_list: str):
         FileNotFoundError("Invalid. Not a file.")
     else:
         print("Valid.")
-
-
-
+        
 def create_dir(dir_name, specific_location):
     dir_path = os.path.join(os.path.abspath(specific_location), dir_name)
 
@@ -86,22 +88,23 @@ def sra_to_fastq(dir_path: str, as_single):
         fastq_path = os.path.join(dir_path, "fastq")
         run_cmd(["fasterq-dump", "--split-files", sra_path, "-O", fastq_path])
 
-    # identify FASTQ folder
-    fastq_dir = os.path.join(dir_path, "fastq")
+    
 
     # check if reads include fwd and rev
     fastqs = sorted(os.listdir(os.path.join(dir_path, "fastq")))[:3]
-    if len(set([fastq.split("_")[0] for fastq in fastqs])) == 2:
+    prefixes = [fastq.split("_")[0] for fastq in fastqs]
+    prefix_counts = Counter(prefixes)
+    all_have_two = any(count == 2 for count in prefix_counts.values())
+    print(all_have_two)
+
+    if all_have_two:
         if as_single:
-            print('yes- paired reads')
-            print(f'the number of _2 reads: {len([f for f in os.listdir(fastq_dir) if "_2.fastq" in f])}')
-            delete__2_files = f"rm -f {os.path.join(fastq_dir, '*_2.fastq')}"
-            run_cmd(["bash", "-c", delete__2_files])
+            delete__2_files = f"rm {os.path.join(dir_path,'fastq', '*_2.fastq')}"
+            run_cmd([delete__2_files])
             print("Single reads- only forward reads are kept, reverse reads are deleted.")
             return ReadsData(dir_path, fwd=True, rev=False)
         else:
             return ReadsData(dir_path, fwd=True, rev=True)
-
 
     return ReadsData(dir_path, fwd=True, rev=False)
 
@@ -303,10 +306,9 @@ def run_pathways_pipeline(dir_path: Path | str, dataset_id: str, threads: int = 
 
 
 
-
 # This function is the main function to download the project. It Handles all the download flow for 16S and Shotgun.
 def visualization(acc_list, dataset_id, data_type, verbose_print, specific_location,as_single, 
-                  threads: int = 8, pathways: str = "no"):
+                  threads: int = 8, pathways: str = "no", clean: bool = False):
     
     verbose_print("\n")
     verbose_print(datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S'))
@@ -345,6 +347,9 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
     reads_data = sra_to_fastq(dir_path, as_single)
     verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish conversion (2/6)")
 
+    if clean:
+        run_cleaning_pipeline(dir_path, threads=threads, backup=True)
+    
     verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating metadata.json (3/6)")
 
     # Store dir_path and reads_data in the data_json dictionary
@@ -412,7 +417,7 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
 
 
 def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_print, specific_location, 
-                                  threads, pathways):
+                                  threads, pathways, clean):
     continue_path = Path(continue_path)
     verbose_print("\n")
     verbose_print('Checking environment...', end=" ")
@@ -424,6 +429,9 @@ def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_p
     verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start conversion (1/5)")
     reads_data = sra_to_fastq(continue_path, as_single=False)
     verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish conversion (1/5)")
+
+    if clean:
+        run_cleaning_pipeline(continue_path, threads=threads, backup=True)
 
     verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating metadata.json (2/5)")
 
@@ -484,12 +492,15 @@ def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_p
         verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finished downloading. 5/5 \n")
 
 
-def visualization_continue(dataset_id, continue_path, data_type, verbose_print, specific_location, threads, pathways):
+def visualization_continue(dataset_id, continue_path, data_type, verbose_print, specific_location, threads, pathways, clean):
     verbose_print("\n")
     verbose_print('Checking environment...', end=" ")
     check_conda_qiime2()
     verbose_print('Done.')
 
+    if clean:
+        run_cleaning_pipeline(continue_path, threads=threads, backup=True)
+    
     json_file_path = f"{continue_path}/metadata.json"
     try:
         with open(json_file_path, 'r') as json_file:
@@ -559,3 +570,47 @@ def visualization_continue(dataset_id, continue_path, data_type, verbose_print, 
             
         verbose_print("\n")
         verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finished downloading.\n")
+
+
+def run_cleaning_pipeline(dir_path: Union[str, Path], threads: int = 8, backup: bool = True) -> None:
+    """
+    Clean host reads with KneadData, then replace <dir_path>/fastq with the cleaned reads.
+    - Backs up originals to <dir_path>/fastq_raw (if backup=True)
+    - Uses DB path from: (arg in generate_dehost) -> $YAMAS_HOST_DB -> ~/.yamas/config.json
+    - Logs של KneadData נשמרים תחת <dir_path>/knead_out/<sample>/kneaddata.log
+    """
+    base = Path(dir_path)
+    fastq_dir   = base / "fastq"
+    knead_out   = base / "knead_out"
+    fastq_clean = base / "fastq_clean"  
+    fastq_dir.mkdir(parents=True, exist_ok=True)
+    knead_out.mkdir(parents=True, exist_ok=True)
+
+    print(f"[KneadData] {datetime.datetime.now():%d/%m/%Y %H:%M:%S} -- start cleaning")
+
+    cleaned_files = run_dehost_pipeline(
+        base_dir=base,
+        threads=threads,
+        host_db=None,      # resolve inside generate_dehost: ENV / config
+        run_fastqc=True,
+        bypass_trf=False
+    )
+    
+    print(f"[KneadData] cleaned files: {len(cleaned_files)}")
+
+    if backup and any(fastq_dir.iterdir()):
+        backup_dir = base / "fastq_raw"
+        backup_dir.mkdir(exist_ok=True)
+        for p in sorted(fastq_dir.iterdir()):
+            if p.is_file():
+                shutil.move(str(p), backup_dir / p.name)
+        print(f"[KneadData] backed up originals to: {backup_dir}")
+
+    for p in sorted(fastq_dir.iterdir()):
+        if p.is_file():
+            p.unlink()
+    for cf in sorted(fastq_clean.glob("*")):
+        if cf.is_file():
+            shutil.copy2(cf, fastq_dir / cf.name)
+
+    print(f"[KneadData] {datetime.datetime.now():%d/%m/%Y %H:%M:%S} -- finished (fastq/ replaced)")

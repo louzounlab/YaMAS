@@ -52,10 +52,11 @@ def main():
     parser.add_argument('--threads', type=int, default=8, help='Total threads for internal tools')
     parser.add_argument('--pathways', choices=['yes', 'no'], default='no', help='Generate HUMAnN pathways tables')
     
+    parser.add_argument("--clean", action="store_true", help="Remove host reads with KneadData (with FastQC) before downstream steps.")
 
     # Parse the command line arguments.
     args = parser.parse_args()
-    
+
     if args.ready:
         set_environment(args.ready[0])
 
@@ -98,7 +99,7 @@ def main():
             acc_list= args.acc_list[0] if args.acc_list else None
             for dataset_name in args.download:
                 download(dataset_name, data_type, acc_list,args.verbose, specific_location,args.as_single, 
-                         threads=args.threads, pathways=args.pathways)
+                         threads=args.threads, pathways=args.pathways, clean=args.clean)
 
     if args.continue_from_fastq:
         dataset_id= args.continue_from_fastq[0]
@@ -108,7 +109,7 @@ def main():
         print(f"{continue_path}, {data_type}")
         if data_type == '16S' or data_type == '18S' or data_type == 'Shotgun':
             continue_from_fastq(dataset_id,continue_path, data_type, args.verbose, specific_location, 
-                                threads=args.threads, pathways=args.pathways)
+                                threads=args.threads, pathways=args.pathways, clean=args.clean)
         else:
         # Ensure that a dataset type is specified when downloading datasets.
             raise ValueError("Missing dataset type. Use --type 16S/18S/Shotgun")
@@ -119,12 +120,10 @@ def main():
         data_type = args.continue_from[2]
         if data_type=='16S' or data_type=='18S' or data_type=='Shotgun':
             continue_from(dataset_id,continue_path,data_type, args.verbose, specific_location,
-                          threads=args.threads, pathways=args.pathways)
- 
+                          threads=args.threads, pathways=args.pathways, clean=args.clean)
         else:
             # Ensure that a dataset type is specified when downloading datasets.
             raise ValueError("Missing dataset type. Use --type 16S/18S/Shotgun")
-        
         
         
 if __name__ == "__main__":
