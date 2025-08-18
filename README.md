@@ -6,7 +6,7 @@
 - [Flags & Options](#flags--options)
 - [Output Structure](#output-structure)
 - [Downloading a project](#downloading-a-project)
-    - [Download from NCBI SRA](#download-from-ncbi-sra)6
+    - [Download from NCBI SRA](#download-from-ncbi-sra)
     - [Continue data downloading](#continue-data-downloading)
     - [Download from ENA](#download-from-ena)
     - [Download using fastq files](#download-using-fastq-files)
@@ -27,8 +27,8 @@ The YaMAS pipeline consists of several stages, depending on the sequencing type:
 - **Existing project folder** (`--continue_from`)  
 
 **For Shotgun datasets:**  
-1. **Download** dataset from SRA/ENA/Qiita  
-2. **Preprocessing** (soon - optional host removal, quality control)  
+1. **Download** dataset from SRA/ENA/Qiita
+2. **KneadData (optional, `--kneaddata yes`)** – Host removal and quality control  
 3. **MetaPhlAn** – Taxonomic profiling  
 4. **HUMAnN** *(if `--pathways` flag is set)* – Functional profiling and pathway analysis  
 5. **Export & Visualization** – Generation of merged abundance tables and plots  
@@ -39,6 +39,8 @@ The YaMAS pipeline consists of several stages, depending on the sequencing type:
 3. **Export & Visualization**  
 
 > **Note:** HUMAnN integration is available **only** for Shotgun datasets and runs immediately after MetaPhlAn.
+
+---
 
 ##  Installation & Dependencies
 Before proceeding with the installation and execution of YaMAS, please ensure that you have a clean environment set up on your system, with all dependencies installed. To create one, follow the steps below:
@@ -285,12 +287,14 @@ Arguments:
 - start & end: choose graph edges. 
 - threads: specifies the number of threads to use for parallel processing, which can speed up the export process (default is 12).
 
+---
 
 ## Arguments and configurations
 1. config: You can add a configuration file in order to save the data in a different folder, and change other configurations. 
 2. verbose: To get more information about a downloading process, use the verbose option (this is highly recommended).
 3. Listing more than one project will download them one by one into different folders.
 
+---
 
 ## Cite us
 If you are using our package, YaMAS for **any** purpose, please cite us; Shtossel Oshrit, Sondra Turjeman, Alona Riumin, Michael R. Goldberg, Arnon Elizur, Yarin Bekor, Hadar Mor, Omry Koren, and Yoram Louzoun. "Recipient-independent, high-accuracy FMT-response prediction and optimization in mice and humans." Microbiome 11, no. 1 (2023): 181. https://link.springer.com/article/10.1186/s40168-023-01623-w

@@ -4,3 +4,5 @@ __pycache__/
 *.tar.gz
 sratoolkit*/
 *.yml
+.idea/
+sratoolkit.3.2.1-ubuntu64/
