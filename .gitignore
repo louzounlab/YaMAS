@@ -6,3 +6,4 @@ sratoolkit*/
 *.yml
 .idea/
 sratoolkit.3.2.1-ubuntu64/
+build/
