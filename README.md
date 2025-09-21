@@ -28,7 +28,7 @@ The YaMAS pipeline consists of several stages, depending on the sequencing type:
 
 **For Shotgun datasets:**  
 1. **Download** dataset from SRA/ENA/Qiita
-2. **KneadData (optional, `--kneaddata yes`)** – Host removal and quality control  
+2. **KneadData (optional, `--clean`)** – Host removal and quality control  
 3. **MetaPhlAn** – Taxonomic profiling  
 4. **HUMAnN** *(if `--pathways` flag is set)* – Functional profiling and pathway analysis  
 5. **Export & Visualization** – Generation of merged abundance tables and plots  
@@ -180,7 +180,7 @@ If not, follow the output guidelines.
 | `--type <16S/18S/Shotgun>` | Type of sequencing data |
 | `--as_single` | Treat paired-end reads as single-end |
 | `--pathways yes/no` | Enable HUMAnN for pathway profiling (Shotgun only) |
-| `--kneaddata yes/no` | Run KneadData for host removal and QC (Shotgun only) |
+| `--clean` | Run KneadData for host removal and QC (Shotgun only) |
 | `--threads <N>` | Number of threads to use |
 | `--continue_from_fastq <ID> <PATH> <TYPE>` | Continue processing from an existing FASTQ folder |
 | `--continue_from <ID> <PATH> <TYPE>` | Continue processing from an existing dataset folder |
