@@ -1,85 +1,119 @@
 import os
+import glob
 from pathlib import Path
 from typing import Union, List, Optional
 from .utilities import run_cmd
 
-
-def run_humann_pipeline(
-    input_file: Union[str, Path],
-    output_dir: Union[str, Path],
-    meta_profile: Union[str, Path],
-    threads: int = 8,
-    chocophlan_db: Optional[Union[str, Path]] = None,
-    uniref_db: Optional[Union[str, Path]] = None,
-    utility_db: Optional[Union[str, Path]] = None,
-    resume: bool = False,
-    input_format: str = "fastq"
-) -> List[Path]:
+def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: int = 8):
     """
-    Run the HUMAnN pipeline from the middle, using existing MetaPhlAn and Bowtie outputs.
-    Supports FASTQ inputs or compressed SAM (.sam.bz2) with bypass of Bowtie2 steps.
+    High-level orchestrator that finds samples and runs HUMAnN on them.
     """
-    input_path = Path(input_file)
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(dir_path)
+    fastq_dir = base_dir / "fastq"
+    qza_dir = base_dir / "qza" # Where MetaPhlAn profiles are stored
+    humann_dir = base_dir / "humann_results"
+    humann_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[HUMAnN] Starting pipeline for {input_path.name}")
-    print(f"[HUMAnN] Input format: {input_format}")
+    print(f"[HUMAnN] Starting pipeline for dataset: {dataset_id}")
+
+    # 1. Identify Samples from FASTQ files
+    # Group by prefix to handle paired reads (e.g., sample_1.fastq, sample_2.fastq)
+    fastq_files = sorted(list(fastq_dir.glob("*.fastq")) + list(fastq_dir.glob("*.fq")))
+    samples = {}
+
+    for f in fastq_files:
+        if "_1.fastq" in f.name or "_1.fq" in f.name:
+            sample_name = f.name.replace("_1.fastq", "").replace("_1.fq", "")
+            if sample_name not in samples: samples[sample_name] = []
+            samples[sample_name].append(f)
+        elif "_2.fastq" in f.name or "_2.fq" in f.name:
+            sample_name = f.name.replace("_2.fastq", "").replace("_2.fq", "")
+            if sample_name not in samples: samples[sample_name] = []
+            samples[sample_name].append(f)
+        else:
+            # Single end or unknown format
+            sample_name = f.stem
+            samples[sample_name] = [f]
+
+    print(f"[HUMAnN] Found {len(samples)} samples to process.")
+
+    # 2. Process each sample
+    for sample_name, files in samples.items():
+        print(f"\n[HUMAnN] Processing sample: {sample_name}")
+        
+        # A. SMART PROFILE FINDER
+        # Check for various naming patterns (e.g. Sample_profile.txt vs Sample_1_profile.txt)
+        candidates = [
+            qza_dir / f"{sample_name}_profile.txt",
+            qza_dir / f"{sample_name}_1_profile.txt",
+            qza_dir / f"{files[0].stem}_profile.txt"
+        ]
+        
+        profile_path = None
+        for cand in candidates:
+            if cand.exists():
+                profile_path = cand
+                break
+        
+        if not profile_path:
+            print(f"[HUMAnN] Warning: No taxonomic profile found for {sample_name}. Checked: {[p.name for p in candidates]}")
+            continue
+
+        # B. Prepare Input (Concatenate if paired)
+        input_for_humann = files[0]
+        temp_cat_file = None
+
+        files.sort() # Ensure _1 comes before _2
+        if len(files) == 2:
+            # Concatenate paired reads for HUMAnN
+            temp_cat_file = humann_dir / f"{sample_name}_merged.fastq"
+            print(f"[HUMAnN] Merging paired reads to {temp_cat_file}...")
+            # Simple concatenation: cat file1 file2 > merged
+            run_cmd([f"cat {files[0]} {files[1]} > {temp_cat_file}"])
+            input_for_humann = temp_cat_file
+        
+        # C. Run HUMAnN
+        try:
+            _run_single_humann(
+                input_file=input_for_humann,
+                output_dir=humann_dir,
+                meta_profile=profile_path,
+                threads=threads
+            )
+        except Exception as e:
+            print(f"[HUMAnN] Error processing {sample_name}: {e}")
+        finally:
+            # Cleanup merged file
+            if temp_cat_file and temp_cat_file.exists():
+                os.remove(temp_cat_file)
+
+def _run_single_humann(
+    input_file: Path,
+    output_dir: Path,
+    meta_profile: Path,
+    threads: int
+):
+    """
+    Low-level wrapper to execute the HUMAnN shell command.
+    """
+    # Define output logs
+    log_file = output_dir / f"{input_file.stem}_humann.log"
     
-    # Build base HUMAnN command
-    cmd_parts = [
+    # Construct command
+    # --input-format fastq is explicitly safer
+    # --taxonomic-profile is critical to bypass MetaPhlAn re-run
+    cmd = [
         "humann",
-        f"--output {out_dir}",
-        f"--threads {threads}",
+        f"--input {input_file}",
+        f"--output {output_dir}",
         f"--taxonomic-profile {meta_profile}",
-        f"--input-format {input_format}"
+        f"--threads {threads}",
+        "--input-format fastq",
+        "--remove-temp-output" # Clean up intermediate bowtie/diamond files
     ]
 
-    # Adjust input and bypass flags
-    if input_format == "fastq":
-        print(f"[HUMAnN] Using FASTQ input: {input_path.name}")
-        cmd_parts.append(f"--input {input_path}")
+    full_cmd = " ".join(cmd) + f" > {log_file} 2>&1"
     
-    elif input_format == "sam":
-        # only treat true .sam.bz2, else fallback to fastq
-        if input_path.name.endswith(".sam.bz2"):
-            sam_path = input_path.with_suffix("").with_suffix(".sam")
-            if not sam_path.exists():
-                print(f"[HUMAnN] Decompressing {input_path.name} to {sam_path.name}")
-                run_cmd([f"bzip2 -dc {input_path} > {sam_path}"])
-                print(f"[HUMAnN] Decompression complete: {sam_path.name}")
-            cmd_parts.append(f"--input {sam_path}")
-            cmd_parts.extend(["--bypass-nucleotide-index", "--bypass-prescreen", "--bypass-nucleotide-search"])
-            print(f"[HUMAnN] Prepared SAM bypass on: {sam_path.name}")
-        else:
-            # fallback to fastq branch
-            input_format = "fastq"
-            cmd_parts[cmd_parts.index(f"--input-format {input_format}")] = f"--input-format fastq"
-            cmd_parts.append(f"--input {input_path}")
-    else:
-        print(f"[HUMAnN] Using other input: {input_path.name}")
-        cmd_parts.append(f"--input {input_path}")
-
-    # Optional databases
-    if chocophlan_db:
-        cmd_parts.append(f"--nucleotide-database {chocophlan_db}")
-    if uniref_db:
-        cmd_parts.append(f"--protein-database {uniref_db}")
-    if utility_db:
-        cmd_parts.append(f"--utility-map {utility_db}")
-    if resume:
-        cmd_parts.append("--resume")
-
-    # Prepare log redirection
-    log_file = out_dir / "humann.log"
-    full_cmd = " ".join(cmd_parts) + f" > {log_file} 2>&1"
-    print(f"[HUMAnN] Running command: {full_cmd}")
-
-    # Execute via run_cmd
+    print(f"[HUMAnN] Executing: {full_cmd}")
     run_cmd([full_cmd])
-    print(f"[HUMAnN] Finished command for {input_path.name}")
-
-    # Return and report pathways output files
-    outputs = sorted(out_dir.glob("*_pathabundance.tsv"))
-    print(f"[HUMAnN] Found {len(outputs)} pathway files: {[p.name for p in outputs]}")
-    return outputs
+    print(f"[HUMAnN] Completed {input_file.name}")

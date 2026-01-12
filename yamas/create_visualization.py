@@ -11,606 +11,349 @@ import json
 import shutil
 from collections import Counter
 
+# Correct import
 from .generate_pathways import run_humann_pipeline
 from pathlib import Path
 
 from .generate_dehost import run_dehost_pipeline  
 from typing import Union
 
-
 CONDA_PREFIX = os.environ.get("CONDA_PREFIX", None)
 
 def check_input(acc_list: str):
-    # flag = False
-
     print("Input path:", acc_list, "... ", end=" ")
     if not (os.path.exists(acc_list)):
-        FileNotFoundError("Invalid. File does not exist.")
+        print("Invalid. File does not exist.")
     elif not (os.path.isfile(acc_list)):
-        FileNotFoundError("Invalid. Not a file.")
+        print("Invalid. Not a file.")
     else:
         print("Valid.")
         
 def create_dir(dir_name, specific_location):
-    dir_path = os.path.join(os.path.abspath(specific_location), dir_name)
+    if specific_location:
+        dir_path = os.path.join(os.path.abspath(specific_location), dir_name)
+    else:
+        dir_path = os.path.abspath(dir_name)
 
     os.makedirs(dir_path, exist_ok=True)
     print(f"{dir_path} created.")
 
-    sra_path = os.path.join(dir_path, 'sra')
-    os.makedirs(sra_path, exist_ok=True)
-    print(f"{sra_path} created.")
-
-    fastq_path = os.path.join(dir_path, 'fastq')
-    os.makedirs(fastq_path, exist_ok=True)
-    print(f"{fastq_path} created.")
-
-    qza_path = os.path.join(dir_path, 'qza')
-    os.makedirs(qza_path, exist_ok=True)
-    print(f"{qza_path} created.")
-
-    vis_path = os.path.join(dir_path, 'vis')
-    os.makedirs(vis_path, exist_ok=True)
-    print(f"{vis_path} created.")
-    
-    humann_path = os.path.join(dir_path, 'humann_results')
-    os.makedirs(humann_path, exist_ok=True)
-    print(f"{humann_path} created.")
+    for sub in ['sra', 'fastq', 'qza', 'vis', 'humann_results', 'export']:
+        os.makedirs(os.path.join(dir_path, sub), exist_ok=True)
 
     return dir_path
 
-
 def download_data_from_sra(dir_path: str, acc_list: str = ""):
-    # ensure the target “sra” folder exists
     sra_dir = os.path.join(dir_path, 'sra')
-    os.makedirs(sra_dir, exist_ok=True)
-    
     run_cmd(['prefetch',
              "--option-file", acc_list,
              "--output-directory", sra_dir,
              "--max-size", "100G"])
-    repo_root = Path(os.environ.get("NCBI_VDB_REPOSITORY_ROOT",
-                                    Path.home() / "ncbi"))
+    
+    repo_root = Path(os.environ.get("NCBI_VDB_REPOSITORY_ROOT", Path.home() / "ncbi"))
     src_dir   = repo_root / "public" / "sra"
     dst_dir   = Path(dir_path) / "sra"
-    dst_dir.mkdir(parents=True, exist_ok=True)
-
-    for sra_file in src_dir.glob("*.sra"):
-        shutil.move(sra_file, dst_dir / sra_file.name)
-        print(f"moved {sra_file} → {dst_dir/sra_file.name}")
-
+    
+    if src_dir.exists():
+        for sra_file in src_dir.glob("*.sra"):
+            shutil.move(str(sra_file), str(dst_dir / sra_file.name))
+            print(f"moved {sra_file} -> {dst_dir/sra_file.name}")
 
 def sra_to_fastq(dir_path: str, as_single):
     print(f"converting files from .sra to .fastq.")
-    for sra_dir in tqdm(os.listdir(os.path.join(dir_path, "sra")), desc="converted files"):
-        sra_file = os.listdir(os.path.join(dir_path, "sra", sra_dir))[0]
-        sra_path = os.path.join(dir_path, "sra", sra_dir, sra_file)
-        fastq_path = os.path.join(dir_path, "fastq")
-        run_cmd(["fasterq-dump", "--split-files", sra_path, "-O", fastq_path])
-
+    sra_root = os.path.join(dir_path, "sra")
+    fastq_path = os.path.join(dir_path, "fastq")
     
+    if not os.path.exists(sra_root):
+        if os.path.exists(fastq_path) and os.listdir(fastq_path):
+             pass 
+        else:
+             print("Warning: SRA directory missing and no FastQ files found.")
+        return ReadsData(dir_path, fwd=True, rev=False)
 
-    # check if reads include fwd and rev
-    fastqs = sorted(os.listdir(os.path.join(dir_path, "fastq")))[:3]
-    prefixes = [fastq.split("_")[0] for fastq in fastqs]
+    for item in tqdm(os.listdir(sra_root), desc="converted files"):
+        full_path = os.path.join(sra_root, item)
+        if os.path.isdir(full_path):
+             nested_files = os.listdir(full_path)
+             if not nested_files: continue
+             target_sra = os.path.join(full_path, nested_files[0])
+        else:
+             target_sra = full_path
+             
+        run_cmd(["fasterq-dump", "--split-files", target_sra, "-O", fastq_path])
+
+    fastqs = sorted([f for f in os.listdir(fastq_path) if f.endswith(".fastq") or f.endswith(".fq")])[:3]
+    if not fastqs:
+        return ReadsData(dir_path, fwd=True, rev=False)
+
+    prefixes = [f.split("_")[0] for f in fastqs]
     prefix_counts = Counter(prefixes)
     all_have_two = any(count == 2 for count in prefix_counts.values())
-    print(all_have_two)
 
     if all_have_two:
         if as_single:
-            delete__2_files = f"rm {os.path.join(dir_path,'fastq', '*_2.fastq')}"
-            run_cmd([delete__2_files])
-            print("Single reads- only forward reads are kept, reverse reads are deleted.")
+            run_cmd([f"rm {os.path.join(fastq_path, '*_2.fastq')}"])
+            print("Single reads requested - reverse reads deleted.")
             return ReadsData(dir_path, fwd=True, rev=False)
         else:
             return ReadsData(dir_path, fwd=True, rev=True)
 
     return ReadsData(dir_path, fwd=True, rev=False)
 
-
 def create_manifest(reads_data: ReadsData):
     base_dir = os.path.abspath(reads_data.dir_path)
     fastq_path = os.path.join(base_dir, "fastq")
-
-    #not paired reads
-    if not reads_data.rev:
-        files = [
-            os.path.join(fastq_path, f) 
-            for f in os.listdir(fastq_path)
-                 if os.path.isfile(os.path.join(fastq_path, f))
-                 ]
-        names = [os.path.splitext(os.path.basename(f))[0] for f in files]
-        
-        manifest_path = os.path.join(base_dir, 'manifest.tsv')
-        with open(manifest_path, 'w', newline='') as manifest:
-            tsv_writer = csv.writer(manifest, delimiter='\t')
-            tsv_writer.writerow(["SampleID", "absolute-filepath"])
-            for n, f in zip(*(names, files)):
-                abs_fp = os.path.abspath(f)
-                tsv_writer.writerow([n, abs_fp])
-        return
-    #paired-end reads
-    files_fwd = sorted([
-        os.path.join(fastq_path, f)
-        for f in os.listdir(fastq_path)
-        if os.path.isfile(os.path.join(fastq_path, f)) and "_1" in f])
-    files_rev = sorted([
-        os.path.join(fastq_path, f)
-        for f in os.listdir(fastq_path)
-        if os.path.isfile(os.path.join(fastq_path, f)) and "_2" in f])
-    
-    names = sorted([
-        os.path.splitext(os.path.basename(f))[0]
-        for f in os.listdir(os.path.join(base_dir, "sra"))])
-    
     manifest_path = os.path.join(base_dir, 'manifest.tsv')
+    
+    if os.path.exists(os.path.join(base_dir, "sra")) and os.listdir(os.path.join(base_dir, "sra")):
+        names = sorted([os.path.splitext(os.path.basename(f))[0] for f in os.listdir(os.path.join(base_dir, "sra"))])
+    else:
+        fq_files = sorted([f for f in os.listdir(fastq_path) if f.endswith(".fastq")])
+        names = sorted(list(set([f.split("_")[0] for f in fq_files])))
 
     with open(manifest_path, 'w', newline='') as manifest:
         tsv_writer = csv.writer(manifest, delimiter='\t')
-        tsv_writer.writerow([
-            "SampleID",
-            "forward-absolute-filepath",
-            "reverse-absolute-filepath"
-        ])
-        for n, ff, fr in zip(names, files_fwd, files_rev):
-            abs_ff = os.path.abspath(ff)
-            abs_fr = os.path.abspath(fr)
-            tsv_writer.writerow([n, abs_ff, abs_fr])
-    
-    # remove sra folder
-    #shutil.rmtree(os.path.join(base_dir, "sra"))
-
-
+        if not reads_data.rev:
+            tsv_writer.writerow(["SampleID", "absolute-filepath"])
+            for n in names:
+                f_path = os.path.join(fastq_path, f"{n}.fastq")
+                if not os.path.exists(f_path): f_path = os.path.join(fastq_path, f"{n}_1.fastq")
+                if os.path.exists(f_path): tsv_writer.writerow([n, os.path.abspath(f_path)])
+        else:
+            tsv_writer.writerow(["SampleID", "forward-absolute-filepath", "reverse-absolute-filepath"])
+            for n in names:
+                f1 = os.path.join(fastq_path, f"{n}_1.fastq")
+                f2 = os.path.join(fastq_path, f"{n}_2.fastq")
+                if os.path.exists(f1) and os.path.exists(f2):
+                    tsv_writer.writerow([n, os.path.abspath(f1), os.path.abspath(f2)])
 
 def qiime_import(reads_data: ReadsData):
-    qza_path = os.path.join(reads_data.dir_path, "qza")
     paired = reads_data.rev and reads_data.fwd
-    if paired: print("Paired reads")
-
-    qza_file_path = os.path.join(qza_path, f"demux-{'paired' if paired else 'single'}-end.qza")
+    out_path = os.path.join(reads_data.dir_path, "qza", f"demux-{'paired' if paired else 'single'}-end.qza")
     command = [
         "qiime", "tools", "import",
         "--type", f"SampleData[{'PairedEndSequencesWithQuality' if paired else 'SequencesWithQuality'}]",
-        "--input-path", f"{os.path.join(reads_data.dir_path, 'manifest.tsv')}",
+        "--input-path", os.path.join(reads_data.dir_path, 'manifest.tsv'),
         "--input-format", "PairedEndFastqManifestPhred33V2" if paired else "SingleEndFastqManifestPhred33V2",
-        "--output-path", qza_file_path,
-
+        "--output-path", out_path,
     ]
     run_cmd(command)
-
-    return qza_file_path
-
+    return out_path
 
 def qiime_demux(reads_data: ReadsData, qza_file_path: str, dataset_id):
-    vis_file_path = os.path.join(reads_data.dir_path, "vis", dataset_id + ".qzv")
+    vis_path = os.path.join(reads_data.dir_path, "vis", dataset_id + ".qzv")
+    run_cmd(["qiime", "demux", "summarize", "--i-data", qza_file_path, "--o-visualization", vis_path])
+    return vis_path
 
-    command = [
-        "qiime", "demux", "summarize",
-        "--i-data", qza_file_path,
-        "--o-visualization", vis_file_path
-    ]
-    run_cmd(command)
-    return vis_file_path
-
-def get_files_in_directory(directory, extension=""):
-    return [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(extension)]
-
-
-def metaphlan_extraction(reads_data, dataset_id):
+def metaphlan_extraction(reads_data, dataset_id, threads=8):
     paired = reads_data.rev and reads_data.fwd
     fastq_path = os.path.join(reads_data.dir_path, "fastq")
     export_path = os.path.join(reads_data.dir_path, "export")
-    run_cmd([f"mkdir {export_path}"])
     final_output_path = os.path.join(export_path, f'{dataset_id}_final.txt')
-    run_cmd([f"touch {final_output_path}"])
-    fastq_files = [a for a in os.listdir(fastq_path) if a.split(".")[-1] == "fastq"]
+    
+    os.makedirs(export_path, exist_ok=True)
+    open(final_output_path, 'a').close()
+
+    fastq_files = sorted([a for a in os.listdir(fastq_path) if a.endswith(".fastq")])
+    qza_dir = os.path.join(reads_data.dir_path, 'qza')
+
+    # FIXED: Enforce the 'Jun23' database which is compatible with HUMAnN 3.x/4.x
+    target_index = "mpa_vJun23_CHOCOPhlAnSGB_202307"
 
     if paired:
-        print("paired")
-        for i in tqdm(range(0, len(fastq_files), 2)):
-            fastq_name = fastq_files[i].split('_')[0]
-            fastq_1 = os.path.join(fastq_path, fastq_files[i])
-            fastq_2 = os.path.join(fastq_path, fastq_files[i + 1])
-            output = os.path.join(fastq_path, f"{fastq_name}.bowtie2.bz2")
-            command = [f"metaphlan {fastq_1},{fastq_2} --input_type fastq --bowtie2out {output} --nproc 24"]
-            run_cmd(command)
+        r1_files = [f for f in fastq_files if "_1.fastq" in f]
+        for f1 in tqdm(r1_files):
+            fname = f1.replace("_1.fastq", "")
+            f2 = f"{fname}_2.fastq"
+            p1 = os.path.join(fastq_path, f1)
+            p2 = os.path.join(fastq_path, f2)
+            if not os.path.exists(p2): continue
 
+            map_out = os.path.join(fastq_path, f"{fname}.bowtie2.bz2")
+            profile_out = os.path.join(qza_dir, f'{fname}_profile.txt')
 
-            final_output_file = os.path.join(os.path.join(reads_data.dir_path, 'qza'), f'{fastq_name}_profile.txt')
-            command = [f"metaphlan {output} --input_type bowtie2out --nproc 24 > {final_output_file}"]
-            run_cmd(command)
-            # after converting the fastq to bowtie and bowtie to profile we can delete these files
-            #run_cmd([f"rm {fastq_1} {fastq_2} {output}"])
+            cmd = (
+                f"metaphlan {p1},{p2} --input_type fastq "
+                f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
+                f"--index {target_index}"
+            )
+            run_cmd([cmd])
     else:
-        print("not paired")
-        for fastq in tqdm(fastq_files):
-            output = os.path.join(os.path.join(reads_data.dir_path, 'qza'), f'{fastq}_profile.txt')
-            fastq = os.path.join(fastq_path, fastq)
-            command = [f"metaphlan {fastq} --input_type fastq --nproc 24 > {output}"]
-            run_cmd(command)
-            # after converting the fastq to profile we can delete the fastq files
-            run_cmd([f"rm {fastq}"])
+        for f in tqdm(fastq_files):
+            p = os.path.join(fastq_path, f)
+            profile_out = os.path.join(qza_dir, f'{f}_profile.txt')
+            map_out = os.path.join(fastq_path, f"{f}.bowtie2.bz2")
+            
+            cmd = (
+                f"metaphlan {p} --input_type fastq "
+                f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
+                f"--index {target_index}"
+            )
+            run_cmd([cmd])
 
-    qza_dir= os.path.join(reads_data.dir_path, 'qza')
-    # Gather all profile files from the directory
-    profile_files = get_files_in_directory(qza_dir, extension="_profile.txt")
-
-    # Merge the profile files
-    with open(final_output_path, 'w') as out:
-        merge(profile_files, out)
-    
-    # delete the fastq dir, we convert all the fastq to profile
-    #shutil.rmtree(fastq_path)
+    profile_files = [os.path.join(qza_dir, f) for f in os.listdir(qza_dir) if f.endswith("_profile.txt")]
+    if profile_files:
+        with open(final_output_path, 'w') as out:
+            merge(profile_files, out, False)
 
 def metaphlan_txt_csv(reads_data, dataset_id):
     export_path = os.path.join(reads_data.dir_path, "export")
     input_file = os.path.join(export_path, f"{dataset_id}_final.txt")
     output_file = os.path.join(export_path, f"{dataset_id}_final_table.csv")
-    with open(input_file, 'r') as txt_file:
-        lines = txt_file.readlines()
+    
+    if not os.path.exists(input_file):
+        print(f"Error: {input_file} not found.")
+        return
 
-    # Extract data  the text file
+    with open(input_file, 'r') as txt:
+        lines = txt.readlines()
+    if not lines: return
+
     headers = lines[0].strip().split('\t')
     data = [line.strip().split('\t') for line in lines[1:]]
+    headers = [h.replace('|', ',') for h in headers]
+    data = [[e.replace('|', ',') for e in row] for row in data]
+    transposed = list(map(list, zip(*data)))
 
-    # Replace "|" with ","
-    headers = [header.replace('|', ',') for header in headers]
-    data = [[entry.replace('|', ',') for entry in row] for row in data]
-
-    # Transpose the data
-    transposed_data = list(map(list, zip(*data)))
-
-    # Write the transposed data to a CSV file
     with open(output_file, 'w', newline='') as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(headers)
-        writer.writerows(transposed_data)
+        writer.writerows(transposed)
 
-    print(f"CSV file '{output_file}' has been created.")
-
-def run_pathways_pipeline(dir_path: Path | str, dataset_id: str, threads: int = 8):
+def run_cleaning_pipeline(dir_path, threads=8, backup=True):
+    run_dehost_pipeline(dir_path, threads=threads)
+    
     base = Path(dir_path)
     fastq_dir = base / "fastq"
-    output_dir  = base / "humann_results"
-    # Ensure output directory exists
-    output_dir.mkdir(parents=True, exist_ok=True)
-    meta_profile = base / "export" / f"{dataset_id}_final.txt"
-
-#    sam_files = sorted(fastq_dir.glob("*.sam"))
-#    if sam_files:
-#    # run HUMAnN on each .sam file individually
-#        for sam in sam_files:
-#            run_humann_pipeline(
-#                str(sam),
-#                str(output_dir),
-#                str(meta_profile),
-#                threads=threads,
-#                input_format="sam"
-#            )
-#        return
+    fastq_clean = base / "fastq_clean"
+    fastq_raw = base / "fastq_raw"
     
-    # If no SAM files, gather FASTQ files
-    fq_files = sorted(fastq_dir.glob("*.fastq"))
-    if fq_files:
-        # Run HUMAnN on each FASTQ file individually
-        for fq in fq_files:
-            run_humann_pipeline(
-                str(fq),
-                str(output_dir),
-                str(meta_profile),
-                threads=threads,
-                input_format="fastq"
-            )
+    if not fastq_clean.exists() or not list(fastq_clean.iterdir()):
+        print("Warning: Cleaning pipeline produced no output. Using raw reads.")
         return
 
+    if backup:
+        fastq_raw.mkdir(exist_ok=True)
+        for f in fastq_dir.iterdir():
+            if f.is_file():
+                shutil.move(str(f), str(fastq_raw / f.name))
+    else:
+        for f in fastq_dir.iterdir():
+            if f.is_file():
+                os.remove(f)
+    
+    swapped_count = 0
+    for f in fastq_clean.iterdir():
+        if f.suffix not in ['.fastq', '.fq']: continue
+        
+        if "paired_1" in f.name:
+            clean_name = f.name.split("_kneaddata")[0] + "_1.fastq"
+            shutil.copy2(str(f), str(fastq_dir / clean_name))
+            swapped_count += 1
+        elif "paired_2" in f.name:
+            clean_name = f.name.split("_kneaddata")[0] + "_2.fastq"
+            shutil.copy2(str(f), str(fastq_dir / clean_name))
+            swapped_count += 1
+        elif "_1.fastq" in f.name and "paired" not in f.name: 
+             shutil.copy2(str(f), str(fastq_dir / f.name))
+             swapped_count +=1
+            
+    print(f"Swapped {swapped_count} cleaned paired files into active fastq folder.")
 
+# --- Main Logic ---
 
-# This function is the main function to download the project. It Handles all the download flow for 16S and Shotgun.
-def visualization(acc_list, dataset_id, data_type, verbose_print, specific_location,as_single, 
+def visualization(acc_list, dataset_id, data_type, verbose_print, specific_location, as_single, 
                   threads: int = 8, pathways: str = "no", clean: bool = False):
     
-    verbose_print("\n")
-    verbose_print(datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S'))
-    data_json = {}
-    # Decide directory name
+    verbose_print("\n" + datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S'))
     dir_name = f"{dataset_id}-{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
 
-    # Check if the enviorment is qiime2 type.
-    verbose_print("\n")
-    verbose_print('Checking environment...', end=" ")
-    check_conda_qiime2()
-    verbose_print('Done.')
-    verbose_print("Checking inputs:")
+    check_conda_qiime2() 
+
+    verbose_print("Checking inputs...")
     check_input(acc_list)
 
-    verbose_print("\n")
-    verbose_print("Creating a new directory for this dataset import:'", dir_name, "'")
-    # Path to working dir:
+    verbose_print(f"Creating directory: {dir_name}")
     dir_path = create_dir(dir_name, specific_location)
-    verbose_print("Find ALL NEW data in:", dir_path)
     json_file_path = f"{dir_path}/metadata.json"
 
-    # This two stages are for all data type. Prefetching the data from the relevant database, and converting it to fatsqs.
-    verbose_print("\n")
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start prefetch (1/6)")
+    verbose_print("Start prefetch (1/6)")
     download_data_from_sra(dir_path, acc_list)
+    
+    data_json = {"dir_path": dir_path, "dataset_id": dataset_id}
+    with open(json_file_path, "w") as jf: json.dump(data_json, jf)
 
-    data_json["dir_path"] = dir_path
-    data_json["dataset_id"] = dataset_id
-    with open(json_file_path, "w") as json_file:
-        json.dump(data_json, json_file)
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish prefetch (1/6)")
-
-    verbose_print("\n")
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start conversion (2/6)")
+    verbose_print("Start conversion (2/6)")
     reads_data = sra_to_fastq(dir_path, as_single)
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish conversion (2/6)")
 
     if clean:
+        verbose_print("Running KneadData cleaning...")
         run_cleaning_pipeline(dir_path, threads=threads, backup=True)
-    
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating metadata.json (3/6)")
 
-    # Store dir_path and reads_data in the data_json dictionary
-    data_json["type"] = data_type
-    data_json["read_data_fwd"] = reads_data.fwd
-    data_json["read_data_rev"] = reads_data.rev
-
-    with open(json_file_path, "w") as json_file:
-        json.dump(data_json, json_file)
-
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating metadata.json (3/6)")
+    data_json.update({
+        "type": data_type,
+        "read_data_fwd": reads_data.fwd,
+        "read_data_rev": reads_data.rev
+    })
+    with open(json_file_path, "w") as jf: json.dump(data_json, jf)
 
     if data_type == '16S' or data_type == '18S':
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating manifest (4/6)")
+        verbose_print("Start 16S flow...")
         create_manifest(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating manifest (4/6)")
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime import' (5/6)")
-        qza_file_path = qiime_import(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime import' (5/6)")
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime demux' (6/6)")
-        vis_file_path = qiime_demux(reads_data, qza_file_path, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime demux' (6/6)")
-
+        qza_path = qiime_import(reads_data)
+        vis_path = qiime_demux(reads_data, qza_path, dataset_id)
         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating visualization\n")
-
-        print(f"Visualization file is located in {vis_file_path}\n"
-              f"Please drag this file to https://view.qiime2.org/ and continue.\n")
-        if reads_data.fwd and reads_data.rev:
-            print(f"Note: The data has both forward and reverse reads.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"as a tuple of two integers."
-                  f"The first place related to the forward read and the second to the reverse.")
-        else:
-            print(f"Note: The data has only a forward read.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"exactly one integers value which is related to the forward read.")
-
         return reads_data.dir_path
-    
-    else:  # shotgun
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start metaphlan extraction (4/6)")
-        metaphlan_extraction(reads_data, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish metaphlan extraction (4/6)")
-
-        verbose_print("\n")
-        verbose_print(
-            f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start converting resualts to CSV (5/6)")
+    else:
+        verbose_print("Start Shotgun flow...")
+        metaphlan_extraction(reads_data, dataset_id, threads)
         metaphlan_txt_csv(reads_data, dataset_id)
-        verbose_print(
-            f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- finish converting resualts to CSV (5/6)")
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finished downloading. 6/6 \n")
-        
-        if pathways == "yes":  # If pathways is set to "yes", run the HUMAnN pipeline
-            run_pathways_pipeline(dir_path, dataset_id, threads)
-
+        if pathways == "yes":
+            run_humann_pipeline(dir_path, dataset_id, threads)
+        print("Shotgun analysis finished successfully.")
 
 def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_print, specific_location, 
                                   threads, pathways, clean):
-    continue_path = Path(continue_path)
-    verbose_print("\n")
-    verbose_print('Checking environment...', end=" ")
     check_conda_qiime2()
-    verbose_print('Done.')
+    continue_path = Path(continue_path)
+    
+    if not (continue_path / "fastq").exists():
+        print(f"Warning: Fastq directory not found in {continue_path}")
 
-    verbose_print("\n")
-    data_json = {}
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start conversion (1/5)")
-    reads_data = sra_to_fastq(continue_path, as_single=False)
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish conversion (1/5)")
+    reads_data = sra_to_fastq(str(continue_path), as_single=False)
 
     if clean:
-        run_cleaning_pipeline(continue_path, threads=threads, backup=True)
+        run_cleaning_pipeline(str(continue_path), threads=threads, backup=True)
 
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating metadata.json (2/5)")
-
-    verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating metadata.json (2/5)")
-
-    if data_type == '16S' or data_type == '18S':
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating manifest (3/5)")
-        create_manifest(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating manifest (3/5)")
-        sra_dir = continue_path / "sra"
-        #if sra_dir.exists():          # only delete if it still exists
-            #shutil.rmtree(sra_dir)
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime import' (4/5)")
-        qza_file_path = qiime_import(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime import' (4/5)")
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime demux' (5/5)")
-        vis_file_path = qiime_demux(reads_data, qza_file_path, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime demux' (5/5)")
-
-        pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating visualization\n")
-
-        print(f"Visualization file is located in {vis_file_path}\n"
-              f"Please drag this file to https://view.qiime2.org/ and continue.\n")
-        if reads_data.fwd and reads_data.rev:
-            print(f"Note: The data has both forward and reverse reads.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"as a tuple of two integers."
-                  f"The first place related to the forward read and the second to the reverse.")
-        else:
-            print(f"Note: The data has only a forward read.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"exactly one integers value which is related to the forward read.")
-            
-        return reads_data.dir_path
-    
-    else:  # shotgun
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start metaphlan extraction (3/5)")
-        metaphlan_extraction(reads_data, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish metaphlan extraction (3/5)")
-
-        verbose_print("\n")
-        verbose_print(
-            f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start converting resualts to CSV (4/5)")
-        metaphlan_txt_csv(reads_data, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- finish converting resualts to CSV (4/5)")
-
-        if pathways == "yes":  # If pathways is set to "yes", run the HUMAnN pipeline
-            run_pathways_pipeline(continue_path, dataset_id, threads)
-                
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finished downloading. 5/5 \n")
-
+    if data_type in ['16S', '18S']:
+         create_manifest(reads_data)
+         qza_path = qiime_import(reads_data)
+         qiime_demux(reads_data, qza_path, dataset_id)
+    else:
+         metaphlan_extraction(reads_data, dataset_id, threads)
+         metaphlan_txt_csv(reads_data, dataset_id)
+         if pathways == "yes":
+             run_humann_pipeline(str(continue_path), dataset_id, threads)
 
 def visualization_continue(dataset_id, continue_path, data_type, verbose_print, specific_location, threads, pathways, clean):
-    verbose_print("\n")
-    verbose_print('Checking environment...', end=" ")
     check_conda_qiime2()
-    verbose_print('Done.')
-
+    
     if clean:
-        run_cleaning_pipeline(continue_path, threads=threads, backup=True)
+        run_cleaning_pipeline(str(continue_path), threads=threads, backup=True)
     
-    json_file_path = f"{continue_path}/metadata.json"
     try:
-        with open(json_file_path, 'r') as json_file:
-            data_json = json.load(json_file)
-            reads_data_fwd = data_json.get("read_data_fwd")
-            reads_data_rev = data_json.get("read_data_rev")
-            if reads_data_fwd == "true":
-                print("yes")
-            print(reads_data_fwd, reads_data_rev)
-            reads_data = ReadsData(continue_path, fwd=reads_data_fwd, rev=reads_data_rev)
+        with open(os.path.join(continue_path, 'metadata.json'), 'r') as jf:
+            meta = json.load(jf)
+            reads_data = ReadsData(str(continue_path), fwd=meta.get("read_data_fwd", True), rev=meta.get("read_data_rev", False))
+    except:
+        reads_data = ReadsData(str(continue_path), fwd=True, rev=False)
 
-    except FileNotFoundError:
-        print(
-            f"Error: Metadata file not found at {json_file_path}. Please check the path and try again, or try --download command to start a new download of this data.")
-        return
-
-    if data_type == '16S' or data_type == '18S':
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start creating manifest (1/3)")
-        create_manifest(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating manifest (1/3)")
-        sra_path = os.path.join(continue_path, "sra")
-        #if os.path.isdir(sra_path):
-            #shutil.rmtree(sra_path)        
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime import' (2/3)")
-        qza_file_path = qiime_import(reads_data)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime import' (2/3)")
-
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'qiime demux' (3/3)")
-        vis_file_path = qiime_demux(reads_data, qza_file_path, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'qiime demux' (3/3)")
-
-        pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating visualization\n")
-
-        print(f"Visualization file is located in {vis_file_path}\n"
-              f"Please drag this file to https://view.qiime2.org/ and continue.\n")
-        if reads_data.fwd and reads_data.rev:
-            print(f"Note: The data has both forward and reverse reads.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"as a tuple of two integers."
-                  f"The first place related to the forward read and the second to the reverse.")
-        else:
-            print(f"Note: The data has only a forward read.\n"
-                  f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"exactly one integers value which is related to the forward read.")
-
-        return reads_data.dir_path
+    if data_type in ['16S', '18S']:
+         create_manifest(reads_data)
+         qza_path = qiime_import(reads_data)
+         qiime_demux(reads_data, qza_path, dataset_id)
     else:
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start metaphlan extraction (1/2)")
-        metaphlan_extraction(reads_data, dataset_id)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish metaphlan extraction (1/2)")
-
-        verbose_print("\n")
-        verbose_print(
-            f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start converting resualts to CSV (2/2)")
-        metaphlan_txt_csv(reads_data, dataset_id)
-        verbose_print(
-            f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- finish converting resualts to CSV (2/2)")
-        
-        if pathways == "yes":  # If pathways is set to "yes", run the HUMAnN pipeline
-            run_pathways_pipeline(continue_path, dataset_id, threads)
-            
-        verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finished downloading.\n")
-
-
-def run_cleaning_pipeline(dir_path: Union[str, Path], threads: int = 8, backup: bool = True) -> None:
-    """
-    Clean host reads with KneadData, then replace <dir_path>/fastq with the cleaned reads.
-    - Backs up originals to <dir_path>/fastq_raw (if backup=True)
-    - Uses DB path from: (arg in generate_dehost) -> $YAMAS_HOST_DB -> ~/.yamas/config.json
-    - Logs של KneadData נשמרים תחת <dir_path>/knead_out/<sample>/kneaddata.log
-    """
-    base = Path(dir_path)
-    fastq_dir   = base / "fastq"
-    knead_out   = base / "knead_out"
-    fastq_clean = base / "fastq_clean"  
-    fastq_dir.mkdir(parents=True, exist_ok=True)
-    knead_out.mkdir(parents=True, exist_ok=True)
-
-    print(f"[KneadData] {datetime.datetime.now():%d/%m/%Y %H:%M:%S} -- start cleaning")
-
-    cleaned_files = run_dehost_pipeline(
-        base_dir=base,
-        threads=threads,
-        host_db=None,      # resolve inside generate_dehost: ENV / config
-        run_fastqc=True,
-        bypass_trf=False
-    )
-    
-    print(f"[KneadData] cleaned files: {len(cleaned_files)}")
-
-    if backup and any(fastq_dir.iterdir()):
-        backup_dir = base / "fastq_raw"
-        backup_dir.mkdir(exist_ok=True)
-        for p in sorted(fastq_dir.iterdir()):
-            if p.is_file():
-                shutil.move(str(p), backup_dir / p.name)
-        print(f"[KneadData] backed up originals to: {backup_dir}")
-
-    for p in sorted(fastq_dir.iterdir()):
-        if p.is_file():
-            p.unlink()
-    for cf in sorted(fastq_clean.glob("*")):
-        if cf.is_file():
-            shutil.copy2(cf, fastq_dir / cf.name)
-
-    print(f"[KneadData] {datetime.datetime.now():%d/%m/%Y %H:%M:%S} -- finished (fastq/ replaced)")
+         metaphlan_extraction(reads_data, dataset_id, threads)
+         metaphlan_txt_csv(reads_data, dataset_id)
+         if pathways == "yes":
+             run_humann_pipeline(str(continue_path), dataset_id, threads)

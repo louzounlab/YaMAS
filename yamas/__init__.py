@@ -1,10 +1,9 @@
 import argparse
 import json
-import pkg_resources
+from importlib.metadata import version, PackageNotFoundError # Modern replacement
 from .dataset_downloading import download
 from .dataset_downloading import continue_from
 from .dataset_downloading import continue_from_fastq
-from .export_data import export
 from .prerun_configs import set_environment
 from .dataset_downloading import download_qiita
 from .dataset_downloading import download_fastq
@@ -14,10 +13,14 @@ def main():
     # Initialize the argument parser with a description.
     parser = argparse.ArgumentParser(description='YMS package')
     
-
-    # Add an argument for displaying the version of the YMS package.
+    # Modern version check for Python 3.13
+    try:
+        pkg_version = version("YMS")
+    except PackageNotFoundError:
+        pkg_version = "unknown"
+        
     parser.add_argument('-v', '--version', action='version',
-                        version='%(prog)s {version}'.format(version=pkg_resources.require("YMS")[0].version))
+                        version='%(prog)s {version}'.format(version=pkg_version))
 
     parser.add_argument('--ready',nargs=1,choices=['Ubuntu', 'CentOS'], help='Type of Operating system')
 
@@ -67,13 +70,18 @@ def main():
         specific_location = config.get('specific_location')
     else:
         # If no config file path is provided, use the default configuration bundled with the package.
-        config_path = pkg_resources.resource_filename(__name__, "config.json")
+        # Fixed for Python 3.13 (removes pkg_resources warning)
+        import importlib.resources
+        config_path = importlib.resources.files(__name__) / "config.json"
         with open(config_path) as f:
             config = json.load(f)
         specific_location = config.get('specific_location')
 
     if args.export:
         try:
+            # MOVED IMPORT HERE: Lazy load only if export is requested
+            from .export_data import export
+            
             # Extract export parameters from the command line arguments.
             origin_dir = args.export[0]
             data_type= args.export[1]
@@ -84,6 +92,8 @@ def main():
 
             # Call the export function with the specified parameters.
             export(origin_dir,data_type,trim, trunc, classifier_file, threads)
+        except ImportError as e:
+            print(f"Error: Could not import export dependencies ({e}). Check your QIIME2 environment.")
         except IndexError:
             # Handle the case where the number of export arguments is insufficient.
             print(f"missing {len(args.export)-1} arguments")
