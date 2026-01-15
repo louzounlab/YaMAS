@@ -277,6 +277,9 @@ Arguments:
 
 ## Exporting a project (only for 16S/18S)
 To export an OTU (Operational Taxonomic Unit), taxonomy, phylogeny tree and a tree.nwk for a single project, use the following command:
+
+
+#### Single-end
 ```
 yamas --export <project_path> <data_type> <start> <end> <classifier_file> <threads>
 ```
@@ -286,6 +289,14 @@ Arguments:
 - classifier_file: path to the trained classifier file. 
 - start & end: choose graph edges. 
 - threads: specifies the number of threads to use for parallel processing, which can speed up the export process (default is 12).
+
+#### Paired-end
+
+```
+yamas --export <project_path> <data_type> <start_forward>, <start_reverse> <end_forward>,<end_reverse> <classifier_file> <threads>
+```
+>for example: yamas --export /PATH/PRJNA633959-30/09/2025_17-55-54 16S 13,13 150,200 CLASSIFIER_FILE 12
+
 
 ---
 

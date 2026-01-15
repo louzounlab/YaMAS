@@ -154,7 +154,9 @@ def fastq_visualization(fastq_path, barcode_path, metadata_path, data_type, verb
         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
 
         print(f"Visualization file is located in {vis_file_path}\n"
-              f"Please drag this file to https://view.qiime2.org/ and continue.\n")
+              f"Please drag this file to https://view.qiime2.org/ and continue.\n"
+              f"It is Highlt recommended to start the trimming from 13")
+        
         if reads_data.fwd and reads_data.rev:
             print(f"Note: The data has both forward and reverse reads.\n"
                   f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
