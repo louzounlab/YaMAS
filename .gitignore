@@ -7,3 +7,6 @@ sratoolkit*/
 .idea/
 sratoolkit.3.2.1-ubuntu64/
 build/
+SRR*/
+SRR*_acc_info.txt
+SRR*_run_info.csv

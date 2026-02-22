@@ -160,6 +160,10 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
     # FIXED: Enforce the 'Jun23' database which is compatible with HUMAnN 3.x/4.x
     target_index = "mpa_vJun23_CHOCOPhlAnSGB_202307"
 
+    # Get database directory from environment variable if set, otherwise let MetaPhlan use its default
+    db_dir = os.environ.get("METAPHLAN_DB", None)
+    db_param = f" --bowtie2db {db_dir}" if db_dir else ""
+
     if paired:
         r1_files = [f for f in fastq_files if "_1.fastq" in f]
         for f1 in tqdm(r1_files):
@@ -175,7 +179,7 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
             cmd = (
                 f"metaphlan {p1},{p2} --input_type fastq "
                 f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
-                f"--index {target_index}"
+                f"--index {target_index}{db_param}"
             )
             run_cmd([cmd])
     else:
@@ -187,7 +191,7 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
             cmd = (
                 f"metaphlan {p} --input_type fastq "
                 f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
-                f"--index {target_index}"
+                f"--index {target_index}{db_param}"
             )
             run_cmd([cmd])
 
