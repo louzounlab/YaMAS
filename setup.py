@@ -35,7 +35,7 @@ setuptools.setup(
     install_requires=[
         'tqdm>=4.0.0',
         'pandas>=1.0.0',
-        'metaphlan>=3.0.0',  # Required for shotgun profiling logic
+        'metaphlan==4.0.6',  # HUMAnN 3.9 compatible MetaPhlAn version
         'humann==3.9',       # Shotgun functional profiling
         'kneaddata==0.12.4', # Host-read removal and QC
         'multiqc==1.33',     # QC report aggregation

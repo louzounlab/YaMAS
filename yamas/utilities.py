@@ -8,13 +8,16 @@ class ReadsData:
     fwd: bool = True
     rev: bool = False
 
-def run_cmd(command: list):
+def run_cmd(command: list, strict: bool = False):
     """Executes a shell command."""
     cmd_str = " ".join(command)
     # print(f"Running: {cmd_str}") # Optional: Uncomment for debugging
     exit_code = os.system(cmd_str)
     if exit_code != 0:
-        print(f"Warning: Command '{cmd_str}' returned non-zero exit status {exit_code}.")
+        msg = f"Command '{cmd_str}' returned non-zero exit status {exit_code}."
+        if strict:
+            raise RuntimeError(msg)
+        print(f"Warning: {msg}")
 
 def qiime2_version():
     """

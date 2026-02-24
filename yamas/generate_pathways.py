@@ -40,7 +40,7 @@ def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: in
     combined_fastq = humann_dir / f"{dataset_id}_combined_input.fastq"
     fastq_list = " ".join(str(f) for f in all_fastq)
     print(f"[HUMAnN] Concatenating all FASTQs → {combined_fastq.name} ...")
-    run_cmd([f"cat {fastq_list} > {combined_fastq}"])
+    run_cmd([f"cat {fastq_list} > {combined_fastq}"], strict=True)
     print(f"[HUMAnN] Concatenation complete.")
 
     # ── 3. Collect and merge all MetaPhlAn profiles ───────────────────────────
@@ -61,7 +61,7 @@ def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: in
         profile_list = " ".join(str(p) for p in profile_files)
         merge_cmd = f"merge_metaphlan_tables.py {profile_list} > {combined_profile}"
         print(f"[HUMAnN] Merging profiles → {combined_profile.name} ...")
-        run_cmd([merge_cmd])
+        run_cmd([merge_cmd], strict=True)
         print(f"[HUMAnN] Profile merge complete.")
 
     if not combined_profile.exists() or combined_profile.stat().st_size == 0:
@@ -84,7 +84,7 @@ def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: in
 
     full_cmd = " ".join(cmd_parts) + f" > {log_file} 2>&1"
     print(f"[HUMAnN] Running: {full_cmd}")
-    run_cmd([full_cmd])
+    run_cmd([full_cmd], strict=True)
     print(f"[HUMAnN] HUMAnN run complete.")
 
     # ── 5. Rename HUMAnN outputs to dataset-level names ──────────────────────
@@ -108,6 +108,19 @@ def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: in
             print(f"[HUMAnN] Renamed: {src_name} → {dst_name}")
         else:
             print(f"[HUMAnN] Warning: expected output not found: {src_name}")
+
+    expected_outputs = [
+        humann_dir / f"{dataset_id}_merged_genefamilies.tsv",
+        humann_dir / f"{dataset_id}_merged_pathabundance.tsv",
+        humann_dir / f"{dataset_id}_merged_pathcoverage.tsv",
+    ]
+    missing_outputs = [str(p) for p in expected_outputs if not p.exists()]
+    if missing_outputs:
+        raise RuntimeError(
+            "HUMAnN finished without expected outputs. "
+            f"Missing files: {missing_outputs}. "
+            f"Check log: {log_file}"
+        )
 
     # ── 6. Clean up temp combined files ──────────────────────────────────────
     for tmp in [combined_fastq, combined_profile]:
