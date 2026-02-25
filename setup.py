@@ -38,7 +38,6 @@ setuptools.setup(
         'metaphlan==4.0.6',  # HUMAnN 3.9 compatible MetaPhlAn version
         'humann==3.9',       # Shotgun functional profiling
         'kneaddata==0.12.4', # Host-read removal and QC
-        'multiqc==1.33',     # QC report aggregation
         'PyYAML>=5.0',       # Required for metadata parsing
     ],
     python_requires='>=3.8', # Explicitly supports 3.13

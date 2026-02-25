@@ -181,7 +181,7 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
                 f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
                 f"--index {target_index}{db_param}"
             )
-            run_cmd([cmd])
+            run_cmd([cmd], suppress_warnings=["Failed to launch x86-64-v3"])
     else:
         for f in tqdm(fastq_files):
             p = os.path.join(fastq_path, f)
@@ -193,7 +193,7 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
                 f"--nproc {threads} --bowtie2out {map_out} -o {profile_out} "
                 f"--index {target_index}{db_param}"
             )
-            run_cmd([cmd])
+            run_cmd([cmd], suppress_warnings=["Failed to launch x86-64-v3"])
 
     profile_files = [os.path.join(qza_dir, f) for f in os.listdir(qza_dir) if f.endswith("_profile.txt")]
     if profile_files:
@@ -224,7 +224,7 @@ def metaphlan_txt_csv(reads_data, dataset_id):
         writer.writerow(headers)
         writer.writerows(transposed)
 
-def run_cleaning_pipeline(dir_path, threads=8, backup=True):
+def run_cleaning_pipeline(dir_path, threads=8, backup=False):
     run_dehost_pipeline(dir_path, threads=threads)
     
     base = Path(dir_path)
@@ -264,6 +264,11 @@ def run_cleaning_pipeline(dir_path, threads=8, backup=True):
             
     print(f"Swapped {swapped_count} cleaned paired files into active fastq folder.")
 
+    # Remove fastq_clean — contents already copied into fastq/
+    if fastq_clean.exists():
+        shutil.rmtree(fastq_clean)
+        print("[Cleaning] Removed fastq_clean/ to save disk space.")
+
 # --- Main Logic ---
 
 def visualization(acc_list, dataset_id, data_type, verbose_print, specific_location, as_single, 
@@ -292,7 +297,7 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
 
     if clean:
         verbose_print("Running KneadData cleaning...")
-        run_cleaning_pipeline(dir_path, threads=threads, backup=True)
+        run_cleaning_pipeline(dir_path, threads=threads, backup=False)
 
     data_json.update({
         "type": data_type,
@@ -327,7 +332,7 @@ def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_p
     reads_data = sra_to_fastq(str(continue_path), as_single=False)
 
     if clean:
-        run_cleaning_pipeline(str(continue_path), threads=threads, backup=True)
+        run_cleaning_pipeline(str(continue_path), threads=threads, backup=False)
 
     if data_type in ['16S', '18S']:
          create_manifest(reads_data)
@@ -343,7 +348,7 @@ def visualization_continue(dataset_id, continue_path, data_type, verbose_print, 
     check_conda_qiime2()
     
     if clean:
-        run_cleaning_pipeline(str(continue_path), threads=threads, backup=True)
+        run_cleaning_pipeline(str(continue_path), threads=threads, backup=False)
     
     try:
         with open(os.path.join(continue_path, 'metadata.json'), 'r') as jf:

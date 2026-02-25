@@ -8,11 +8,24 @@ class ReadsData:
     fwd: bool = True
     rev: bool = False
 
-def run_cmd(command: list, strict: bool = False):
-    """Executes a shell command."""
+def run_cmd(command: list, strict: bool = False, suppress_warnings: list = None):
+    """Executes a shell command.
+    
+    Args:
+        suppress_warnings: List of substrings. Any stderr line containing one of
+                           these strings will be silently dropped.
+    """
+    import sys
     cmd_str = " ".join(command)
     # print(f"Running: {cmd_str}") # Optional: Uncomment for debugging
-    exit_code = os.system(cmd_str)
+    if suppress_warnings:
+        result = subprocess.run(cmd_str, shell=True, stderr=subprocess.PIPE, text=True)
+        for line in result.stderr.splitlines():
+            if not any(pattern in line for pattern in suppress_warnings):
+                print(line, file=sys.stderr)
+        exit_code = result.returncode
+    else:
+        exit_code = os.system(cmd_str)
     if exit_code != 0:
         msg = f"Command '{cmd_str}' returned non-zero exit status {exit_code}."
         if strict:
