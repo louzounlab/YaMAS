@@ -1,22 +1,13 @@
 import os
-import shutil
 from pathlib import Path
-from typing import Union, List, Optional
+from typing import Union
+from collections import defaultdict
 from .utilities import run_cmd
-
 
 def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: int = 8):
     """
-    Runs HUMAnN once on all samples combined:
-      1. Concatenate all FASTQ files (all samples, both paired reads) into one file.
-      2. Merge all per-sample MetaPhlAn profiles into one combined profile.
-      3. Run HUMAnN once on the combined input.
-      4. Rename outputs to:
-           {dataset_id}_merged_genefamilies.tsv
-           {dataset_id}_merged_pathabundance.tsv
-           {dataset_id}_merged_pathcoverage.tsv
-           {dataset_id}_humann.log
-      5. Clean up temp files.
+    Runs HUMAnN on each sample individually (concatenating Paired-end if needed), 
+    then joins the tables so the final output is exactly 4 files: 3 merged tables and 1 log file.
     """
     base_dir = Path(dir_path)
     fastq_dir = base_dir / "fastq"
@@ -24,111 +15,119 @@ def run_humann_pipeline(dir_path: Union[str, Path], dataset_id: str, threads: in
     humann_dir = base_dir / "humann_results"
     humann_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[HUMAnN] Starting single-run pipeline for dataset: {dataset_id}")
+    print(f"[HUMAnN] Starting pipeline for dataset: {dataset_id}")
 
-    # ── 1. Collect all FASTQ files ────────────────────────────────────────────
-    all_fastq = sorted(
-        list(fastq_dir.glob("*.fastq")) + list(fastq_dir.glob("*.fq"))
-    )
+    all_fastq = sorted(list(fastq_dir.glob("*.fastq")) + list(fastq_dir.glob("*.fq")))
     if not all_fastq:
         print(f"[HUMAnN] No FASTQ files found in {fastq_dir}. Aborting.")
         return
 
-    print(f"[HUMAnN] Found {len(all_fastq)} FASTQ file(s): {[f.name for f in all_fastq]}")
-
-    # ── 2. Concatenate all FASTQs into one combined file ──────────────────────
-    combined_fastq = humann_dir / f"{dataset_id}_combined_input.fastq"
-    fastq_list = " ".join(str(f) for f in all_fastq)
-    print(f"[HUMAnN] Concatenating all FASTQs → {combined_fastq.name} ...")
-    run_cmd([f"cat {fastq_list} > {combined_fastq}"], strict=True)
-    print(f"[HUMAnN] Concatenation complete.")
-
-    # ── 3. Collect and merge all MetaPhlAn profiles ───────────────────────────
-    profile_files = sorted(qza_dir.glob("*_profile.txt"))
-    if not profile_files:
-        print(f"[HUMAnN] No MetaPhlAn profiles found in {qza_dir}. Aborting.")
-        combined_fastq.unlink(missing_ok=True)
-        return
-
-    print(f"[HUMAnN] Found {len(profile_files)} profile(s): {[p.name for p in profile_files]}")
-
-    combined_profile = humann_dir / f"{dataset_id}_combined_profile.txt"
-
-    if len(profile_files) == 1:
-        shutil.copy(profile_files[0], combined_profile)
-        print(f"[HUMAnN] Single profile — copied as combined profile.")
-    else:
-        profile_list = " ".join(str(p) for p in profile_files)
-        merge_cmd = f"merge_metaphlan_tables.py {profile_list} > {combined_profile}"
-        print(f"[HUMAnN] Merging profiles → {combined_profile.name} ...")
-        run_cmd([merge_cmd], strict=True)
-        print(f"[HUMAnN] Profile merge complete.")
-
-    if not combined_profile.exists() or combined_profile.stat().st_size == 0:
-        print(f"[HUMAnN] Combined profile is missing or empty. Aborting.")
-        combined_fastq.unlink(missing_ok=True)
-        return
-
-    # ── 4. Run HUMAnN once on the combined input ──────────────────────────────
     log_file = humann_dir / f"{dataset_id}_humann.log"
+    if log_file.exists():
+        log_file.unlink()
 
-    cmd_parts = [
-        "humann",
-        f"--input {combined_fastq}",
-        f"--output {humann_dir}",
-        f"--taxonomic-profile {combined_profile}",
-        f"--threads {threads}",
-        "--input-format fastq",
-        "--remove-temp-output",
-    ]
+    # 1. Group files by sample to handle Paired-end data correctly
+    samples = defaultdict(list)
+    for fq in all_fastq:
+        name = fq.name
+        # Strip common paired-end suffixes to get the base sample name
+        for suffix in ["_1_1.fastq", "_1_2.fastq", "_1.fastq", "_2.fastq", ".fastq", ".fq"]:
+            if name.endswith(suffix):
+                sample_name = name.replace(suffix, "")
+                break
+        samples[sample_name].append(fq)
 
-    full_cmd = " ".join(cmd_parts) + f" > {log_file} 2>&1"
-    print(f"[HUMAnN] Running: {full_cmd}")
-    run_cmd([full_cmd], strict=True)
-    print(f"[HUMAnN] HUMAnN run complete.")
+    print(f"[HUMAnN] Found {len(samples)} sample(s) from {len(all_fastq)} FASTQ file(s). Running HUMAnN per sample...")
 
-    # ── 5. Rename HUMAnN outputs to dataset-level names ──────────────────────
-    # HUMAnN names outputs after the input stem, e.g.:
-    #   {dataset_id}_combined_input_genefamilies.tsv
-    #   {dataset_id}_combined_input_pathabundance.tsv
-    #   {dataset_id}_combined_input_pathcoverage.tsv
-    input_stem = combined_fastq.stem  # e.g. "SRR041654_combined_input"
+    # 2. Run HUMAnN on each sample
+    for sample_name, fq_list in samples.items():
+        fq_list.sort() # Ensure _1 comes before _2
+        
+        # Determine the correct MetaPhlAn profile path
+        # It might have a "_1" suffix depending on how MetaPhlAn named it during paired execution
+        profile_path = qza_dir / f"{sample_name}_profile.txt"
+        if not profile_path.exists():
+            profile_path = qza_dir / f"{sample_name}_1_profile.txt"
 
-    rename_map = {
-        f"{input_stem}_genefamilies.tsv": f"{dataset_id}_merged_genefamilies.tsv",
-        f"{input_stem}_pathabundance.tsv": f"{dataset_id}_merged_pathabundance.tsv",
-        f"{input_stem}_pathcoverage.tsv":  f"{dataset_id}_merged_pathcoverage.tsv",
-    }
+        input_fastq = fq_list[0]
+        temp_concat = False
+        
+        # If Paired-end (2 files), concatenate them into a temp file for HUMAnN
+        if len(fq_list) > 1:
+            input_fastq = humann_dir / f"{sample_name}_temp_concat.fastq"
+            fq_str = " ".join(str(f) for f in fq_list)
+            print(f"  -> Concatenating paired reads for {sample_name}...")
+            run_cmd([f"cat {fq_str} > {input_fastq}"], strict=False)
+            temp_concat = True
 
-    for src_name, dst_name in rename_map.items():
-        src = humann_dir / src_name
-        dst = humann_dir / dst_name
-        if src.exists():
-            src.rename(dst)
-            print(f"[HUMAnN] Renamed: {src_name} → {dst_name}")
+        cmd_parts = [
+            "humann",
+            f"--input {input_fastq}",
+            f"--output {humann_dir}",
+            f"--threads {threads}",
+            "--input-format fastq",
+            "--remove-temp-output"
+        ]
+        
+        # Skip taxonomic prescreen if profile exists
+        if profile_path.exists():
+            cmd_parts.append(f"--taxonomic-profile {profile_path}")
         else:
-            print(f"[HUMAnN] Warning: expected output not found: {src_name}")
+            print(f"  -> Warning: Profile not found for {sample_name}. HUMAnN will run MetaPhlAn internally.")
 
-    expected_outputs = [
-        humann_dir / f"{dataset_id}_merged_genefamilies.tsv",
-        humann_dir / f"{dataset_id}_merged_pathabundance.tsv",
-        humann_dir / f"{dataset_id}_merged_pathcoverage.tsv",
-    ]
-    missing_outputs = [str(p) for p in expected_outputs if not p.exists()]
-    if missing_outputs:
-        raise RuntimeError(
-            "HUMAnN finished without expected outputs. "
-            f"Missing files: {missing_outputs}. "
-            f"Check log: {log_file}"
+        # Execute and APPEND (>>) to the master log
+        full_cmd = " ".join(cmd_parts) + f" >> {log_file} 2>&1"
+        print(f"  -> Processing {sample_name}...")
+        run_cmd([full_cmd], strict=False)
+        
+        # Clean up temp concat file to save disk space
+        if temp_concat and input_fastq.exists():
+            input_fastq.unlink()
+
+    # 3. Join the individual tables into 3 merged matrices
+    print("\n[HUMAnN] Joining tables across all samples...")
+    tables_to_join = ["genefamilies", "pathabundance", "pathcoverage"]
+    
+    for table in tables_to_join:
+        out_merged = humann_dir / f"{dataset_id}_merged_{table}.tsv"
+        join_cmd = (
+            f"humann_join_tables --input {humann_dir} "
+            f"--output {out_merged} --file_name {table}"
         )
+        run_cmd([join_cmd], strict=False)
 
-    # ── 6. Clean up temp combined files ──────────────────────────────────────
-    for tmp in [combined_fastq, combined_profile]:
-        if tmp.exists():
-            tmp.unlink()
-            print(f"[HUMAnN] Removed temp file: {tmp.name}")
+    # 4. Cleanup: Remove individual sample TSVs, keeping only the 3 merged tables + log
+    print("[HUMAnN] Cleaning up intermediate sample files...")
+    for table in tables_to_join:
+        for f in humann_dir.glob(f"*_{table}.tsv"):
+            if not f.name.startswith(f"{dataset_id}_merged_"):
+                f.unlink()
 
-    print(f"[HUMAnN] Pipeline complete. Final files in {humann_dir}:")
+    # 5. Fix column headers in the final merged files
+    print("\n[HUMAnN] Formatting column headers in final tables...")
+    for table in tables_to_join:
+        merged_file = humann_dir / f"{dataset_id}_merged_{table}.tsv"
+        if merged_file.exists():
+            with open(merged_file, 'r') as f:
+                lines = f.readlines()
+            
+            if lines:
+                headers = lines[0].strip('\n').split('\t')
+                clean_headers = []
+                for h in headers:
+                    if h.startswith("#"):
+                        clean_headers.append(h)  # Keep "# Pathway" or "# Gene Family"
+                    else:
+                        # מחיקת החלקים המיותרים בלבד:
+                        clean_h = h.replace("_temp_concat", "").replace("-RPKs", "")
+                        clean_headers.append(clean_h)
+                
+                lines[0] = '\t'.join(clean_headers) + '\n'
+                
+                with open(merged_file, 'w') as f:
+                    f.writelines(lines)
+
+    print(f"\n[HUMAnN] Pipeline complete! Final output files in {humann_dir}:")
     for f in sorted(humann_dir.iterdir()):
         if f.is_file():
-            print(f"  {f.name}")
+            print(f"  - {f.name}")
