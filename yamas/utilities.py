@@ -34,33 +34,17 @@ def run_cmd(command: list, strict: bool = False, suppress_warnings: list = None)
 
 def qiime2_version():
     """
-    Attempts to find QIIME2 version safely.
-    Returns a default fallback if not found to prevent crashes in Python 3.13.
+    Legacy function kept for reference. No longer needed since QIIME2
+    dependency has been removed. Returns a placeholder string.
     """
-    try:
-        # Use subprocess.getoutput to actually capture the string.
-        # os.system (used in legacy code) only returns exit codes, not output.
-        o = subprocess.getoutput("conda env list")
-        for env_1 in o.split("\n"):
-            for env_2 in env_1.split("/"):
-                if "qiime2" in env_2 and " " not in env_2:
-                    return env_2
-    except Exception:
-        pass
-    return "qiime2-unknown"
+    return "qiime2-removed"
 
 def download_classifier_url():
-    version = qiime2_version()
-    # Handle cases where version parsing fails
-    ver_str = version.split('-')[1] if '-' in version else "2023.2"
-    return f"https://data.qiime2.org/{ver_str}/common/gg-13-8-99-nb-classifier.qza"
+    """Return a URL hint for downloading a vsearch-compatible reference database."""
+    return ("https://www.arb-silva.de/download/archive/qiime/ or "
+            "ftp://greengenes.microbio.me/greengenes_release/ "
+            "(download a FASTA formatted for vsearch --sintax)")
 
 def check_conda_qiime2():
-    """
-    Refactored to WARN rather than CRASH.
-    Allows Shotgun pipeline to run in non-QIIME environments (Python 3.13).
-    """
-    conda_prefix = os.environ.get("CONDA_PREFIX", "")
-    if "qiime2" not in os.path.split(conda_prefix)[-1]:
-        print("Warning: 'qiime2' environment not detected. "
-              "Shotgun analysis will proceed, but 16S features requiring QIIME2 will fail.");
+    """No-op. QIIME2 is no longer required — kept for backward compatibility."""
+    pass

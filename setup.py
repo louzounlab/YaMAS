@@ -18,8 +18,8 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     version="2.0.0",
-    author="Yarin Bekor, Shani Finkelstein, Ofir Aharoni",
-    author_email="yarin.bekor@gmail.com, shaninn123@gmail.com, ofir.aharoni5@gmail.com",
+    author="Yarin Bekor, Shani Finkelstein, Ofir Aharoni, Kfir Yaakov Pinto",
+    author_email="yarin.bekor@gmail.com, shaninn123@gmail.com, ofir.aharoni5@gmail.com, kfirpinto@gmail.com",
     description="YOLO Microbiome Analysis System",
     license='MIT',
     entry_points={
@@ -39,6 +39,9 @@ setuptools.setup(
         'humann==3.9',       # Shotgun functional profiling
         'kneaddata==0.12.4', # Host-read removal and QC
         'PyYAML>=5.0',       # Required for metadata parsing
+        'cutadapt==5.2',     # 16S/18S: standalone demux & adapter trimming
+        'multiqc==1.33',     # 16S/18S: QC report aggregation (replaces qiime demux summarize)
+        'biopython==1.86',   # 16S/18S: phylogeny tree I/O and manipulation
     ],
     python_requires='>=3.8', # Explicitly supports 3.13
 )

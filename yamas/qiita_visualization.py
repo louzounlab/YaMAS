@@ -1,186 +1,141 @@
 from __future__ import annotations
 
 import pandas as pd
-import csv
 import gzip
 import os.path
 import pickle
 import datetime
-from tqdm import tqdm
-from metaphlan.utils.merge_metaphlan_tables import merge
-from .utilities import run_cmd, ReadsData, check_conda_qiime2
+from .utilities import run_cmd, ReadsData
+from .fastq_visualization import check_metadata
 import json
 import shutil
-import tarfile
 import os
-import yaml
-
-def metaphlan_extraction(reads_data):
-    paired = reads_data.rev and reads_data.fwd
-    fastq_path = os.path.join(reads_data.dir_path, "fastq")
-    export_path = os.path.join(reads_data.dir_path, "export")
-    run_cmd([f"mkdir {export_path}"])
-    final_output_path = os.path.join(export_path, 'final.txt')
-    run_cmd([f"touch {final_output_path}"])
-    fastq_files = [a for a in os.listdir(fastq_path) if a.split(".")[-1] == "fastq"]
-    args = []
-    if paired:
-        print("paired")
-        for i in tqdm(range(0,len(fastq_files),2)):
-            fastq_name = fastq_files[i].split('_')[0]
-            fastq_1 = os.path.join(fastq_path, fastq_files[i])
-            fastq_2 = os.path.join(fastq_path, fastq_files[i+1])
-            output = os.path.join(fastq_path,f"{fastq_name}.bowtie2.bz2")
-            command = [f"metaphlan {fastq_1},{fastq_2} --input_type fastq --bowtie2out {output} --nproc 24"]
-            run_cmd(command)
-            final_output_file = os.path.join(os.path.join(reads_data.dir_path, 'qza'), f'{fastq_name}_profile.txt')
-            command = [f"metaphlan {output} --input_type bowtie2out --nproc 24 > {final_output_file}"]
-            run_cmd(command)
-            args.append(final_output_file)
-    else:
-        print("not paired")
-        for fastq in tqdm(fastq_files):
-            output = os.path.join(os.path.join(reads_data.dir_path, 'qza'), f'{fastq}_profile.txt')
-            fastq = os.path.join(fastq_path,fastq)
-            command = [f"metaphlan {fastq} --input_type fastq --nproc 24 > {output}"]
-            run_cmd(command)
-            args.append(output)
-    merge(args, open(final_output_path, 'w'), gtdb=False)
-
-def metaphlan_txt_csv(reads_data, dataset_id):
-    export_path = os.path.join(reads_data.dir_path, "export")
-    input_file = os.path.join(export_path,f"{dataset_id}_final.txt")
-    output_file = os.path.join(export_path,f"{dataset_id}_final_table.csv")
-    with open(input_file, 'r') as txt_file:
-        lines = txt_file.readlines()
-
-    # Extract data from the text file
-    headers = lines[0].strip().split('\t')
-    data = [line.strip().split('\t') for line in lines[1:]]
-
-    # Replace "|" with ","
-    headers = [header.replace('|', ',') for header in headers]
-    data = [[entry.replace('|', ',') for entry in row] for row in data]
-
-    # Transpose the data
-    transposed_data = list(map(list, zip(*data)))
-
-    # Write the transposed data to a CSV file
-    with open(output_file, 'w', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(headers)
-        writer.writerows(transposed_data)
-
-    print(f"CSV file '{output_file}' has been created.")
-
-def qiime_import(dir_path,fastq_path):
-    qza_path = os.path.join(dir_path, "qza")
-
-    multiplexed_qza_file_path = os.path.join(qza_path, "multiplexed-seqs.qza")
-
-    command = [
-        "qiime", "tools", "import",
-        "--type", "MultiplexedSingleEndBarcodeInSequence",
-        "--input-path", fastq_path,
-        "--output-path", multiplexed_qza_file_path,
-    ]
-    run_cmd(command)
-    return multiplexed_qza_file_path
 
 
-def qiime_demux(dir_path,multiplexed_qza_file_path, metadata_path):
-
-    demux_qza_file_path = os.path.join(dir_path,"qza", "demux-single-end.qza")
-    untrim_qza_file_path = os.path.join(dir_path, "qza","untrimmed.qza")
-
-
-    command = [
-        "qiime", "cutadapt", "demux-single",
-        "--i-seqs", multiplexed_qza_file_path,
-        "--m-barcodes-file", metadata_path,
-        "--m-barcodes-column", "barcode",
-        "--p-error-rate", "0",
-        "--o-per-sample-sequences", demux_qza_file_path,
-        "--o-untrimmed-sequences", untrim_qza_file_path,
-        "--verbose"
-    ]
-    run_cmd(command)
-    return demux_qza_file_path
-
-def check_metadata(metadata_path):
-
-    metadata = pd.read_csv(metadata_path, sep='\t')
-    if 'barcode' in metadata.columns:
-        return "yes"
-    return "no"
+def _read_barcodes_from_metadata(metadata_path):
+    """Read barcode -> sample-id mapping from metadata TSV."""
+    df = pd.read_csv(metadata_path, sep='\t')
+    if 'barcode' not in df.columns:
+        raise ValueError("Metadata must have a 'barcode' column.")
+    id_col = df.columns[0]
+    return dict(zip(df['barcode'], df[id_col]))
 
 
-def trim_single(dir_path,demux_qza_file_path):
-    #Trim adapters from demultiplexed reads
-    #If there are sequencing adapters or PCR primers in the reads which you'd like to remove, you can do that next as follows.
-
-    trimmed_seqs_file_path = os.path.join(dir_path,"qza", "trimmed-seqs.qza")
-    command = [
-        "qiime", "cutadapt", "trim-single",
-        "--i-demultiplexed-sequences", demux_qza_file_path,
-        "--p-front", "GCTACGGGGGG",
-        "--p-error-rate", "0",
-        "--o-trimmed-sequences", trimmed_seqs_file_path,
-        "--verbose"
-    ]
-    run_cmd(command)
-    return trimmed_seqs_file_path
-def qiime_summarize(dir_path,trimmed_seqs_file_path):
-    #Summarize demultiplexed and trimmed reads
-    vis_path = os.path.join(dir_path, "vis")
-    vis_file_path = os.path.join(vis_path, "trimmed-seqs.qzv")
-
-    command=[
-        "qiime", "demux", "summarize",
-        "--i-data", trimmed_seqs_file_path,
-        "--o-visualization", vis_file_path
-    ]
-    run_cmd(command)
-    return vis_file_path
+def _reverse_complement(seq):
+    comp = str.maketrans('ACGTacgt', 'TGCAtgca')
+    return seq.translate(comp)[::-1]
 
 
-def get_reads_data(dir_path,demux_qza_file_path):
+def demux_and_trim_qiita(dir_path, fastq_path, metadata_path, adapter="GCTACGGGGGG"):
+    """Demultiplex Qiita-style inline-barcoded reads using cutadapt,
+    then trim the specified adapter.
 
-    output_dir_path = os.path.join(dir_path,"extracted-reads")
+    Replaces: qiime import (MultiplexedSingleEndBarcodeInSequence) +
+              qiime cutadapt demux-single + qiime cutadapt trim-single.
 
-    #extract data from demultiplexed-seqs.qza file
-    command = [
-        "qiime", "tools", "extract",
-        "--input-path", demux_qza_file_path,
-        "--output-path", output_dir_path
-    ]
-    run_cmd(command)
+    Qiita preprocessed FASTQs have the barcode at the start of each read.
+    We use cutadapt --action=none with combinatorial demux to split by
+    barcode, then cutadapt again to trim the adapter/primer.
+    """
+    fastq_dir = os.path.join(dir_path, "fastq")
+    os.makedirs(fastq_dir, exist_ok=True)
 
-    os.chdir(output_dir_path)
-    subdirectories = [d for d in os.listdir() if os.path.isdir(d)]
-    if not subdirectories:
-        print("Something wrong with the data. Its doesn't follow the rules of qiita.")
-        return
-    else:
-        subdirectory_path = subdirectories[0]
+    barcode_map = _read_barcodes_from_metadata(metadata_path)
 
-    os.chdir(subdirectory_path)
+    # Build forward + reverse-complement barcode lookup
+    full_map = {}
+    for barcode, sample_id in barcode_map.items():
+        full_map[barcode] = sample_id
+        full_map[_reverse_complement(barcode)] = sample_id
 
-    metadata_file_path = 'metadata.yaml'
-    if os.path.isfile(metadata_file_path):
-        with open(metadata_file_path, 'r') as metadata_file:
-            metadata_content = yaml.safe_load(metadata_file)
+    # Determine barcode length from first barcode
+    barcode_len = len(next(iter(barcode_map)))
 
-            # Check if 'single' is in the metadata content
-            if 'Single' in str(metadata_content):
-                return ReadsData(dir_path, fwd=True, rev=False)
+    # Read the preprocessed fastq
+    is_gz = fastq_path.endswith('.gz')
+    opener = gzip.open if is_gz else open
 
+    sample_files = {}
+    matched = 0
+    unmatched = 0
+
+    with opener(fastq_path, 'rt') as fq:
+        while True:
+            header = fq.readline()
+            if not header:
+                break
+            seq = fq.readline()
+            plus = fq.readline()
+            qual = fq.readline()
+
+            # The barcode is at the beginning of the sequence
+            bc = seq[:barcode_len].strip()
+            sample_id = full_map.get(bc)
+
+            if sample_id:
+                # Strip the barcode from the read
+                trimmed_seq = seq[barcode_len:]
+                trimmed_qual = qual[barcode_len:]
+                if sample_id not in sample_files:
+                    out_path = os.path.join(fastq_dir, f"{sample_id}_1.fastq")
+                    sample_files[sample_id] = open(out_path, 'w')
+                sample_files[sample_id].write(header + trimmed_seq + plus + trimmed_qual)
+                matched += 1
             else:
-                return ReadsData(dir_path, fwd=True, rev=True)
-    else:
-        print("Something wrong with the data. Its doesn't follow the rules of qiita")
+                unmatched += 1
+
+    for fh in sample_files.values():
+        fh.close()
+
+    print(f"Demultiplexed {matched} reads into {len(sample_files)} samples. {unmatched} unmatched.")
+
+    # Trim adapter from each per-sample FASTQ
+    if adapter:
+        print(f"Trimming adapter {adapter} from demultiplexed reads...")
+        for fname in sorted(os.listdir(fastq_dir)):
+            if not fname.endswith(".fastq"):
+                continue
+            in_path = os.path.join(fastq_dir, fname)
+            tmp_path = in_path + ".trimmed"
+            cmd = (
+                f"cutadapt -g {adapter} -e 0 -o {tmp_path} {in_path}"
+            )
+            run_cmd([cmd])
+            os.replace(tmp_path, in_path)
+
+    return fastq_dir
 
 
+def run_qc_visualization(dir_path, threads=8):
+    """Run FastQC + MultiQC on demultiplexed FASTQs. Replaces qiime demux summarize."""
+    fastq_dir = os.path.join(dir_path, "fastq")
+    vis_dir = os.path.join(dir_path, "vis")
+    fastqc_out = os.path.join(vis_dir, "fastqc")
+    os.makedirs(fastqc_out, exist_ok=True)
+
+    fastq_files = [
+        os.path.join(fastq_dir, f)
+        for f in sorted(os.listdir(fastq_dir))
+        if f.endswith(".fastq") or f.endswith(".fq")
+    ]
+    if not fastq_files:
+        print("Warning: No FASTQ files found for QC.")
+        return None
+
+    file_list = " ".join(fastq_files)
+    run_cmd([f"fastqc -t {threads} -o {fastqc_out} {file_list}"])
+    run_cmd([f"multiqc {fastqc_out} -o {vis_dir} -f -n multiqc_report"])
+
+    report_path = os.path.join(vis_dir, "multiqc_report.html")
+    return report_path
+
+
+def detect_reads_data(dir_path):
+    """Detect if data is single or paired-end by inspecting the fastq/ directory."""
+    fastq_dir = os.path.join(dir_path, "fastq")
+    fastq_files = sorted([f for f in os.listdir(fastq_dir) if f.endswith(".fastq") or f.endswith(".fq")])
+    has_r2 = any("_2.fastq" in f or "_2.fq" in f for f in fastq_files)
+    return ReadsData(dir_path, fwd=True, rev=has_r2)
 
 
 def qiita_visualization(fastq_path,metadata_path,data_type, verbose_print):
@@ -190,61 +145,43 @@ def qiita_visualization(fastq_path,metadata_path,data_type, verbose_print):
     dir_path = os.path.commonpath([os.path.dirname(fastq_path), os.path.dirname(metadata_path)])
 
     verbose_print("\n")
-    verbose_print('Checking environment...', end=" ")
-    check_conda_qiime2()
-    verbose_print('Done.')
-    verbose_print("\n")
     verbose_print('Checking metadata...', end= " ")
     if check_metadata(metadata_path) == "no":
         verbose_print("The 'barcode' column does not exist in metadata.tsv. check and try again.")
         return
     verbose_print('Done.')
     verbose_print("\n")
-    run_cmd(["mkdir", os.path.join(dir_path, "qza")])
-    run_cmd(["mkdir", os.path.join(dir_path, "vis")])
-
+    os.makedirs(os.path.join(dir_path, "qza"), exist_ok=True)
+    os.makedirs(os.path.join(dir_path, "vis"), exist_ok=True)
 
     verbose_print("Find ALL NEW data in the directory you created:", dir_path)
 
     if data_type == '16S' or data_type == '18S':
 
         verbose_print("\n")
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'Import the multiplexed sequences' (1/4)")
-        multiplexed_qza_file_path= qiime_import(dir_path,fastq_path)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'Import the multiplexed sequences' (1/4)")
+        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'Demultiplex & trim reads (cutadapt)' (1/2)")
+        demux_and_trim_qiita(dir_path, fastq_path, metadata_path)
+        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'Demultiplex & trim reads (cutadapt)' (1/2)")
         verbose_print("\n")
 
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'Demultiplex the reads' (2/4)")
-        demux_qza_file_path=qiime_demux(dir_path, multiplexed_qza_file_path,metadata_path)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'Demultiplex the reads' (2/4)")
-        verbose_print("\n")
+        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'QC visualization (FastQC + MultiQC)' (2/2)")
+        vis_file_path = run_qc_visualization(dir_path)
+        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'QC visualization (FastQC + MultiQC)' (2/2)")
 
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'Trim adapters from demultiplexed reads' (3/4)")
-        trimmed_seqs_file_path=trim_single(dir_path,demux_qza_file_path)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'rim adapters from demultiplexed reads' (3/4)")
-        verbose_print("\n")
-
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Start 'Summarize demultiplexed and trimmed reads' (4/4)")
-        vis_file_path= qiime_summarize(dir_path,trimmed_seqs_file_path)
-        verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish 'Summarize demultiplexed and trimmed reads' (4/4)")
-
-        #getting values about fwd and rev
-        reads_data= get_reads_data(dir_path,demux_qza_file_path)
+        reads_data = detect_reads_data(dir_path)
         verbose_print(f"{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')} -- Finish creating visualization\n")
 
         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
 
-        print(f"Visualization file is located in {vis_file_path}\n"
-              f"Please drag this file to https://view.qiime2.org/ and continue.\n")
+        print(f"QC report is located in {vis_file_path}\n")
         if reads_data.fwd and reads_data.rev:
             print(f"Note: The data has both forward and reverse reads.\n"
                   f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"as a tuple of two integers."
-                  f"The first place related to the forward read and the second to the reverse.")
+                  f"as comma-separated values (e.g. 13,13 150,200).")
         else:
             print(f"Note: The data has only a forward read.\n"
                   f"Therefore, you must give the parameters 'trim' and 'trunc' of export() "
-                  f"exactly one integers value which is related to the forward read.")
+                  f"as single integer values.")
 
         return reads_data.dir_path
 

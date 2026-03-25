@@ -43,6 +43,9 @@ def main():
     parser.add_argument('--export', nargs=6, metavar=("origin_dir_path", "data_type", "start", "end", "classifier_file", "threads"),
                         help="Must provide: origin_dir_path, data_type, start, end, classifier_file, threads")
 
+    parser.add_argument('--export-as-single', action='store_true',
+                        help='Force single-end processing even if reverse reads exist (useful for salvaging data with no PE overlap)')
+
     # Add an argument for specifying the path to a configuration file.
     parser.add_argument('--config', help='Path to config file')
 
@@ -91,9 +94,11 @@ def main():
             threads = args.export[5]
 
             # Call the export function with the specified parameters.
-            export(origin_dir,data_type,trim, trunc, classifier_file, threads)
+            export(origin_dir, data_type, trim, trunc, classifier_file, threads, 
+                   force_single_end=args.export_as_single)
         except ImportError as e:
-            print(f"Error: Could not import export dependencies ({e}). Check your QIIME2 environment.")
+            print(f"Error: Could not import export dependencies ({e}). "
+                  "Ensure biopython, cutadapt, and other 16S deps are installed.")
         except IndexError:
             # Handle the case where the number of export arguments is insufficient.
             print(f"missing {len(args.export)-1} arguments")

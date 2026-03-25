@@ -6,7 +6,7 @@ import pickle
 import datetime
 from tqdm import tqdm
 from metaphlan.utils.merge_metaphlan_tables import merge
-from .utilities import run_cmd, ReadsData, check_conda_qiime2
+from .utilities import run_cmd, ReadsData
 import json
 import shutil
 from collections import Counter
@@ -127,23 +127,34 @@ def create_manifest(reads_data: ReadsData):
                 if os.path.exists(f1) and os.path.exists(f2):
                     tsv_writer.writerow([n, os.path.abspath(f1), os.path.abspath(f2)])
 
-def qiime_import(reads_data: ReadsData):
-    paired = reads_data.rev and reads_data.fwd
-    out_path = os.path.join(reads_data.dir_path, "qza", f"demux-{'paired' if paired else 'single'}-end.qza")
-    command = [
-        "qiime", "tools", "import",
-        "--type", f"SampleData[{'PairedEndSequencesWithQuality' if paired else 'SequencesWithQuality'}]",
-        "--input-path", os.path.join(reads_data.dir_path, 'manifest.tsv'),
-        "--input-format", "PairedEndFastqManifestPhred33V2" if paired else "SingleEndFastqManifestPhred33V2",
-        "--output-path", out_path,
-    ]
-    run_cmd(command)
-    return out_path
+def run_fastqc_multiqc(reads_data: ReadsData, dataset_id: str, threads: int = 8):
+    """Run FastQC on all FASTQ files, then MultiQC to produce a single HTML report.
 
-def qiime_demux(reads_data: ReadsData, qza_file_path: str, dataset_id):
-    vis_path = os.path.join(reads_data.dir_path, "vis", dataset_id + ".qzv")
-    run_cmd(["qiime", "demux", "summarize", "--i-data", qza_file_path, "--o-visualization", vis_path])
-    return vis_path
+    Replaces the old qiime import + qiime demux summarize visualization.
+    The report is saved as  vis/multiqc_report.html.
+    """
+    fastq_dir = os.path.join(reads_data.dir_path, "fastq")
+    vis_dir = os.path.join(reads_data.dir_path, "vis")
+    fastqc_out = os.path.join(vis_dir, "fastqc")
+    os.makedirs(fastqc_out, exist_ok=True)
+
+    fastq_files = [
+        os.path.join(fastq_dir, f)
+        for f in sorted(os.listdir(fastq_dir))
+        if f.endswith(".fastq") or f.endswith(".fq")
+    ]
+    if not fastq_files:
+        print("Warning: No FASTQ files found for QC.")
+        return None
+
+    file_list = " ".join(fastq_files)
+    run_cmd([f"fastqc -t {threads} -o {fastqc_out} {file_list}"])
+    run_cmd([f"multiqc {fastqc_out} -o {vis_dir} -f -n {dataset_id}_multiqc_report"])
+
+    report_path = os.path.join(vis_dir, f"{dataset_id}_multiqc_report.html")
+    if os.path.exists(report_path):
+        print(f"QC report: {report_path}")
+    return report_path
 
 def metaphlan_extraction(reads_data, dataset_id, threads=8):
     paired = reads_data.rev and reads_data.fwd
@@ -277,8 +288,6 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
     verbose_print("\n" + datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S'))
     dir_name = f"{dataset_id}-{datetime.datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}"
 
-    check_conda_qiime2() 
-
     verbose_print("Checking inputs...")
     check_input(acc_list)
 
@@ -309,9 +318,18 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
     if data_type == '16S' or data_type == '18S':
         verbose_print("Start 16S flow...")
         create_manifest(reads_data)
-        qza_path = qiime_import(reads_data)
-        vis_path = qiime_demux(reads_data, qza_path, dataset_id)
+        verbose_print("Running FastQC + MultiQC for QC visualization...")
+        run_fastqc_multiqc(reads_data, dataset_id, threads=threads)
         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
+        print(f"QC visualization saved in {os.path.join(reads_data.dir_path, 'vis')}")
+        if reads_data.fwd and reads_data.rev:
+            print("Note: The data has both forward and reverse reads.\n"
+                  "Therefore, you must give the parameters 'trim' and 'trunc' of export() "
+                  "as comma-separated values (e.g. 13,13 150,200).")
+        else:
+            print("Note: The data has only a forward read.\n"
+                  "Therefore, you must give the parameters 'trim' and 'trunc' of export() "
+                  "as single integer values.")
         return reads_data.dir_path
     else:
         verbose_print("Start Shotgun flow...")
@@ -323,7 +341,6 @@ def visualization(acc_list, dataset_id, data_type, verbose_print, specific_locat
 
 def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_print, specific_location, 
                                   threads, pathways, clean):
-    check_conda_qiime2()
     continue_path = Path(continue_path)
     
     if not (continue_path / "fastq").exists():
@@ -336,8 +353,8 @@ def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_p
 
     if data_type in ['16S', '18S']:
          create_manifest(reads_data)
-         qza_path = qiime_import(reads_data)
-         qiime_demux(reads_data, qza_path, dataset_id)
+         run_fastqc_multiqc(reads_data, dataset_id, threads=threads)
+         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
     else:
          metaphlan_extraction(reads_data, dataset_id, threads)
          metaphlan_txt_csv(reads_data, dataset_id)
@@ -345,8 +362,6 @@ def visualization_continue_fastq(dataset_id, continue_path, data_type, verbose_p
              run_humann_pipeline(str(continue_path), dataset_id, threads)
 
 def visualization_continue(dataset_id, continue_path, data_type, verbose_print, specific_location, threads, pathways, clean):
-    check_conda_qiime2()
-    
     if clean:
         run_cleaning_pipeline(str(continue_path), threads=threads, backup=False)
     
@@ -359,8 +374,8 @@ def visualization_continue(dataset_id, continue_path, data_type, verbose_print, 
 
     if data_type in ['16S', '18S']:
          create_manifest(reads_data)
-         qza_path = qiime_import(reads_data)
-         qiime_demux(reads_data, qza_path, dataset_id)
+         run_fastqc_multiqc(reads_data, dataset_id, threads=threads)
+         pickle.dump(reads_data, open(os.path.join(reads_data.dir_path, "reads_data.pkl"), "wb"))
     else:
          metaphlan_extraction(reads_data, dataset_id, threads)
          metaphlan_txt_csv(reads_data, dataset_id)
