@@ -139,6 +139,19 @@ def main():
         else:
             # Ensure that a dataset type is specified when downloading datasets.
             raise ValueError("Missing dataset type. Use --type 16S/18S/Shotgun")
+
+    if args.qiita:
+        fastq_path = args.qiita[0]
+        metadata_path = args.qiita[1]
+        data_type = args.qiita[2]
+        download_qiita(fastq_path, metadata_path, data_type, args.verbose)
+
+    if args.fastq:
+        fastq_path = args.fastq[0]
+        barcode_path = args.fastq[1]
+        metadata_path = args.fastq[2]
+        data_type = args.fastq[3]
+        download_fastq(fastq_path, barcode_path, metadata_path, data_type, args.verbose)
         
         
 if __name__ == "__main__":
