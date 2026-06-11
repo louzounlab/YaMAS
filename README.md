@@ -1,59 +1,51 @@
-# YaMAS: YOLO Microbiome Analysis System
+# YaMAS (YOLO Microbiome Analysis System)
 
-A fast, standalone 16S/18S rRNA and Shotgun metagenomics pipeline for microbiome analysis. The updated 16S module eliminates QIIME2 dependencies, using **VSEARCH** for rapid amplicon processing, **cutadapt** for demultiplexing and trimming, **SINTAX** for taxonomy classification, and **FastTree** for phylogeny.
-
----
-
-## Table of Contents
-
-- [Project Overview](#project-overview)
-- [Key Features](#key-features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
+### Table of Contents
+- [Pipeline Overview](#pipeline-overview)
+- [Installation & Dependencies](#installation--dependencies)
 - [Flags & Options](#flags--options)
-- [Commands Reference](#commands-reference)
-  - [Data Download](#1-data-download)
-  - [Export & Analysis](#2-export--analysis)
-  - [**The --export-as-single Flag (CRITICAL)**](#3-the---export-as-single-flag-critical)
 - [Output Structure](#output-structure)
+- [Downloading a project](#downloading-a-project)
+    - [Download from NCBI SRA](#download-from-ncbi-sra)
+    - [Continue data downloading](#continue-data-downloading)
+    - [Download from ENA](#download-from-ena)
+    - [Download using fastq files](#download-using-fastq-files)
+- [Exporting a project (only for 16S/18S)](#exporting-a-project-only-for-16s18s)
+    - [The --export-as-single Flag](#the---export-as-single-flag)
 - [Troubleshooting](#troubleshooting)
-- [Pipeline Architecture](#pipeline-architecture)
+- [Arguments and configurations](#arguments-and-configurations)
 
----
 
-## Project Overview
+YaMAS is a standalone microbiome analysis pipeline for downloading and processing DNA datasets from NCBI SRA and ENA. It is developed by the [YOLO lab team](https://yolo.math.biu.ac.il), and is designed to be simple, efficient, and easy to use for non-programmers. The updated 16S/18S module eliminates QIIME2 dependencies, using **VSEARCH** for rapid amplicon processing, **cutadapt** for demultiplexing and trimming, **SINTAX** for taxonomy classification, and **FastTree** for phylogeny — all within a single Python 3.13 conda environment.
 
-YaMAS is a modular microbiome analysis framework supporting:
+## Pipeline Overview
 
-### 16S/18S rRNA Processing
-- **Demultiplexing**: EMP, Qiita, or manifest-based formats
-- **Quality Control**: FastQC + MultiQC for comprehensive QC reports
-- **Denoising**: VSEARCH UNOISE3 algorithm (equivalent to DADA2 ASV detection)
-- **Taxonomy**: SINTAX k-mer voting for fast, accurate classification
-- **Phylogeny**: MAFFT alignment + FastTree tree construction
+The YaMAS pipeline consists of several stages, depending on the sequencing type:
 
-### Shotgun Metagenomics (Unchanged)
-- MetaPHLAn4 for community profiling
-- HUMAnN3 for functional pathway analysis
-- KneadData for host-read removal
+**Supported input sources:**
+- **Project ID** from SRA/ENA (automatic download)
+- **Local FASTQ file** (process without download)
+- **Existing FASTQ folder** (`--continue_from_fastq`)
+- **Existing project folder** (`--continue_from`)
 
-### Design Philosophy
-- **No QIIME2**: Standalone tools provide speed, flexibility, and reproducibility
-- **Single Python 3.13 environment**: All dependencies (vsearch, mafft, fasttree, cutadapt, multiqc) installed via conda
-- **Data preservation**: Forward reads used when PE merging fails (new `--export-as-single` flag)
+**For Shotgun datasets:**
+1. **Download** dataset from SRA/ENA
+2. **KneadData** *(optional, `--clean`)* – Host removal and quality control
+3. **MetaPhlAn4** – Taxonomic profiling
+4. **HUMAnN3** *(if `--pathways yes` is set)* – Functional profiling and pathway analysis
+5. **Export & Visualization** – Merged abundance tables and QC reports
 
----
+**For 16S/18S datasets:**
+1. **Download** dataset
+2. **Demultiplexing** – cutadapt (EMP / Qiita / manifest formats)
+3. **Quality Control** – FastQC + MultiQC HTML reports
+4. **Trimming** – cutadapt 5′ trim and read truncation
+5. **Denoising** – VSEARCH UNOISE3 (ASV detection, chimera removal, 99% OTU clustering)
+6. **Taxonomy** – VSEARCH SINTAX with 0.8 bootstrap confidence cutoff
+7. **Phylogeny** – MAFFT alignment + FastTree (GTR model, midpoint-rooted)
+8. **Export** – OTU table, taxonomy table, phylogenetic tree
 
-## Key Features
-
-| Feature | Benefit |
-|---------|---------|
-| **VSEARCH denoising** | UNOISE3 algorithm: single-nucleotide ASVs comparable to DADA2 |
-| **Direct FASTA processing** | No `.qza` container overhead; plain text for transparency |
-| **SINTAX taxonomy** | Bootstrap voting; 0.8 confidence cutoff (conservative) |
-| **FastQC + MultiQC** | Beautiful HTML QC reports (replaces QIIME2 `.qzv` files) |
-| **Bioinformatically-sound fallback** | `--export-as-single` flag salvages PE data when merging fails |
-| **Parallel execution** | Full multi-threading support via `--threads` parameter |
+> **Note:** HUMAnN3 integration is available **only** for Shotgun datasets and runs immediately after MetaPhlAn4.
 
 ---
 
@@ -75,11 +67,11 @@ source ~/.bashrc
 ### Step 2: Clone the Repository
 
 ```bash
-git clone -b main https://github.com/KfirPinto/Updated_yamas_3.13.git
-cd Updated_yamas_3.13
+git clone -b main https://github.com/louzounlab/YaMAS.git
+cd YaMAS
 ```
 
-### Step 3: Create Conda Environment & Install with Conda
+### Step 3: Create the Conda Environment and Install
 
 ```bash
 conda create -n yamas_env python=3.13 -y
@@ -99,19 +91,20 @@ conda install -y -c bioconda -c conda-forge \
 pip install -e .
 ```
 
-This installs Python dependencies via `setup.py`:
-- `pandas>=1.0.0` – data manipulation
-- `tqdm>=4.0.0` – progress bars
-- `metaphlan==4.0.6` – Shotgun taxonomic profiling
-- `humann==3.9` – functional pathway analysis
-- `kneaddata==0.12.4` – QC and host decontamination
-- `biopython==1.86` – phylogeny tree I/O
-- `cutadapt==5.2` – demultiplexing and adapter trimming
-- `multiqc==1.33` – QC report aggregation
+`pip install -e .` installs all Python dependencies from `setup.py`, including:
 
-### Step 4: Download & Configure Reference Databases
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `pandas` | ≥1.0.0 | Data manipulation |
+| `tqdm` | ≥4.0.0 | Progress bars |
+| `metaphlan` | 4.0.6 | Shotgun taxonomic profiling |
+| `humann` | 3.9 | Functional pathway analysis |
+| `kneaddata` | 0.12.4 | QC and host decontamination |
+| `biopython` | 1.86 | Phylogeny tree I/O |
+| `cutadapt` | 5.2 | Demultiplexing and adapter trimming |
+| `multiqc` | 1.33 | QC report aggregation |
 
-Set your database root directory:
+### Step 4: Set Your Database Root Directory
 
 ```bash
 export DB_ROOT="/path/to/databases"  # Change this to your desired location
@@ -122,23 +115,23 @@ export DB_ROOT="/path/to/databases"  # Change this to your desired location
 **If you plan to use the Shotgun pathway, download these databases:**
 
 ```bash
-# KneadData databases for host removal
+# KneadData: host removal
 kneaddata_database --download human_genome bowtie2 $DB_ROOT/kneaddata_db
 
-# HUMAnN functional profiling databases
+# HUMAnN3: functional profiling
 humann_databases --download chocophlan full $DB_ROOT/humann_db --update-config yes
 humann_databases --download uniref uniref90_diamond $DB_ROOT/humann_db --update-config yes
 humann_databases --download utility_mapping full $DB_ROOT/humann_db --update-config yes
 
-# MetaPHLAn taxonomic profiling database
+# MetaPhlAn4: taxonomic profiling
 metaphlan --install --index mpa_vJun23_CHOCOPhlAnSGB_202307 --bowtie2db $DB_ROOT/metaphlan_db
 ```
 
-> **Note**: These databases are large (~20+ GB total). If you've already downloaded them, skip this step.
+> **Note:** These databases are large (~20+ GB total). If you have already downloaded them, skip to Step 7.
 
-### Step 5b: Download 16S Reference Classifier
+### Step 5b: Download the 16S Reference Classifier
 
-Download a VSEARCH --sintax compatible FASTA reference:
+Download a VSEARCH `--sintax` compatible FASTA reference:
 
 1. Visit: https://www.drive5.com/usearch/manual/sintax_downloads.html
 2. Download `gg_16s_13.5.fa.gz` (GreenGenes 13.5, 99% OTUs)
@@ -150,9 +143,7 @@ cp /path/to/gg_16s_13.5.fa.gz $DB_ROOT/16S_classifiers/
 gunzip $DB_ROOT/16S_classifiers/gg_16s_13.5.fa.gz
 ```
 
-### Step 6: Update Environment Variables
-
-Configure Conda environment variables to persist across sessions:
+### Step 6: Persist Environment Variables
 
 ```bash
 conda env config vars set YAMAS_HOST_DB=$DB_ROOT/kneaddata_db
@@ -160,9 +151,9 @@ conda env config vars set HUMANN_DB_DIR=$DB_ROOT/humann_db
 conda env config vars set METAPHLAN_DB_DIR=$DB_ROOT/metaphlan_db
 ```
 
-### Step 7: Configure HUMAnN Database Paths (If Reusing Existing Databases)
+### Step 7: Configure HUMAnN Paths (If Reusing Existing Databases)
 
-If you've already downloaded HUMAnN databases, ensure they're configured:
+If you have already downloaded HUMAnN databases, ensure they are configured:
 
 ```bash
 humann_config --update database_folders nucleotide $DB_ROOT/humann_db/chocophlan
@@ -177,7 +168,7 @@ conda deactivate
 conda activate yamas_env
 ```
 
-**You're all set!** Verify installation:
+**You're all set!** Verify the installation:
 
 ```bash
 yamas --version
@@ -188,309 +179,45 @@ fastqc -v
 
 ---
 
-## Quick Start
-
-### Scenario 1: Download & Process 16S Data (Paired-End, Successful Merge)
-
-```bash
-# Download SRR accessions
-yamas --download SRR11415443 SRR11415445 --type 16S \
-  --acc_list accessions.txt --verbose
-
-# Analyze (paired-end with comma-separated trim/trunc)
-yamas --export /path/SRR11415443-... 16S 13,13 150,150 \
-  /path/gg_16s_13.5.fa 24
-```
-
-### Scenario 2: Long Amplicon, PE Merge Fails → Use --export-as-single
-
-```bash
-# Same download step...
-
-# Export with SINGLE-END fallback
-yamas --export /path/PRJEB30615-... 16S 15 150 \
-  /path/gg_16s_13.5.fa 24 --export-as-single
-```
-
-### Scenario 3: Shotgun Metagenomics
-
-```bash
-yamas --download SRR11415443 --type Shotgun --verbose
-
-# No --export needed; taxonomy and HUMAnN tables auto-generated
-```
-
----
-
 ## Flags & Options
 
-| Flag | Description | Context |
-|------|-------------|---------|
-| `--download ACCESSIONS...` | Download dataset(s) from SRA/ENA/Qiita | All types |
-| `--type {16S,18S,Shotgun}` | Specify sequencing type | All operations |
-| `--export PATH DIR TYPE` | Export 16S/18S analysis (OTU, taxonomy, tree) | 16S/18S only |
-| `--export-as-single` | Force single-end processing when PE merge fails | 16S/18S with --export |
-| `--clean` | Remove host reads with KneadData before analysis | Download & Shotgun |
-| `--pathways {yes,no}` | Generate HUMAnN pathway analysis (default: no) | Shotgun only |
-| `--threads INT` | Number of parallel threads (default: 8) | All operations |
-| `--acc_list FILE` | Path to file with one accession per line | With --download |
-| `--verbose` | Print detailed progress information | Download & export |
-| `--as_single` | Process as single-end (keeps only forward reads) | Legacy; see `--export-as-single` |
-| `--continue_from PATH` | Resume processing from existing project folder | Download only |
-| `--continue_from_fastq PATH` | Resume from existing FASTQ folder | Download only |
-| `--config FILE` | Load configuration from JSON file | Optional |
-| `--ready OS_TYPE` | Initialize YaMAS environment (Ubuntu/CentOS) | Setup only |
-
----
-
-## Commands Reference
-
-### 1. Data Download
-
-**Download 16S/18S reads from SRA:**
-```bash
-yamas --download ACCESSION1 ACCESSION2 --type 16S \
-  --acc_list accessions.txt \
-  --verbose \
-  --threads 12
-```
-
-| Argument | Required? | Description |
-|----------|-----------|-------------|
-| `--download ACCESSIONS...` | Yes | Space-separated SRA accessions |
-| `--type {16S,18S,Shotgun}` | Yes | Data type |
-| `--acc_list FILE` | No | File with accessions (one per line) |
-| `--verbose` | No | Print progress messages |
-| `--threads INT` | No | Parallel threads (default: 8) |
-| `--clean` | No | Remove human-associated reads with KneadData |
-| `--pathways {yes,no}` | No | Generate HUMAnN pathway analysis (Shotgun only) |
-
-**Output:** A timestamped directory containing:
-- `fastq/` – demultiplexed FASTQ files
-- `qza/` – intermediate files
-- `vis/` – QC reports
-- `export/` – final OTU tables, taxonomy, tree (16S/18S after --export phase)
-
----
-
-### 2. Export & Analysis
-
-**Paired-End (reads successfully merge):**
-```bash
-yamas --export /path/dataset-... 16S \
-  13,13 \
-  150,150 \
-  /path/gg_16s_13.5.fa \
-  24
-```
-
-**Single-End (or PE fallback with --export-as-single flag):**
-```bash
-yamas --export /path/dataset-... 16S \
-  15 \
-  150 \
-  /path/gg_16s_13.5.fa \
-  24 \
-  --export-as-single
-```
-
-| Argument | Format | Description |
-|----------|--------|-------------|
-| `origin_dir_path` | string | Directory with reads_data.pkl |
-| `data_type` | 16S\|18S\|Shotgun | Analysis type |
-| `trim` | **"13,13"** (PE) or **"13"** (SE) | Bases trimmed from 5' end |
-| `trunc` | **"150,150"** (PE) or **"150"** (SE) | Read length to truncate to |
-| `classifier_file` | path | FASTA reference DB (VSEARCH --sintax format) |
-| `threads` | int | CPU threads (default: 12) |
-| `--export-as-single` | flag | Force single-end processing (see below) |
-
-#### ⚠️ **The --export-as-single Flag: When & Why to Use It**
-
-##### Background
-
-By default, YaMAS attempts to **merge Paired-End (PE) reads**. This is optimal when:
-- Forward and Reverse reads overlap significantly
-- Both reads are high quality
-- The targeted amplicon is short enough to allow physical overlap
-
-##### When PE Merging Fails
-
-Two common scenarios cause PE merging to fail:
-
-**Scenario 1: Long Amplicon + Short Read Length**
-- Example: V3-V4 16S region (~420 bp) with 150 bp PE reads
-- Result: VSEARCH mergepairs drops **99.9% of reads** with error "too few kmers found on same diagonal"
-- Biological consequence: Dataset becomes unusable
-
-**Scenario 2: Poor Reverse Read Quality**
-- Example: Reverse reads have high error rates from sequencing issues
-- Result: PE merging succeeds but produces low-quality consensus from bad R2 sequences
-- Biological consequence: OTU table inflated with sequence artifacts
-
-##### The Solution: --export-as-single Flag
-
-When PE merging fails or produces poor results, use:
-
-```bash
-yamas --export /path/dataset-... 16S 15 150 /path/classifier.fa 24 --export-as-single
-```
-
-**What this flag does:**
-
-1. **Ignores Reverse reads completely** – R2 FASTQ files are not processed
-2. **Processes ONLY Forward reads** – F reads (_1.fastq) are retained
-3. **Prevents data duplication** – Reverse-complement sequences won't inflate the OTU table as "ghost" ASVs
-
-##### Why This Matters Bioinformatically
-
-Without selective filtering, if you processed both `_1.fastq` and `_2.fastq` independently as single-end reads:
-
-```
-_1.fastq (forward reads)     → Treated as novel sequences → OTU set A
-_2.fastq (reverse reads)     → Reverse-complements of originals → OTU set B (duplicates)
-                                                               Total: ~2x feature inflation
-```
-
-By using `--export-as-single`, the pipeline:
-- Preserves only the canonical forward orientation
-- Eliminates duplicate OTUs from reverse complements
-- Maintains biological integrity of the OTU table
-
-##### Usage Examples
-
-**Standard paired-end (default behavior):**
-```bash
-yamas --export /path/SRR11415443-... 16S 13,13 150,150 /path/classifier.fa 24
-# Uses comma-separated parameters for forward and reverse trim/trunc
-```
-
-**Long amplicon fallback:**
-```bash
-yamas --export /path/PRJEB30615-... 16S 15 150 /path/classifier.fa 24 --export-as-single
-# Uses single integers; ignores R2 files; processes F1 only
-```
-
-**Native single-end data (rare):**
-```bash
-yamas --export /path/SRR041654-... 16S 13 150 /path/classifier.fa 24
-# Uses single integers; no flag needed if data has no _2 files
-```
-
-##### Decision Tree
-
-```
-Do you have both _1 and _2 FASTQ files?
-├─ YES, and merge succeeds? → Use comma-separated params (default PE mode)
-├─ YES, but merge fails (99% dropout)? → Add --export-as-single flag
-├─ YES, but R2 quality terrible? → Add --export-as-single flag
-└─ NO (native SE data)? → Use single integers (no flag needed)
-```
-
----
-
-### 3. The --export-as-single Flag (CRITICAL)
-
-**When to use this flag:**
-
-```bash
-yamas --export /path/dataset-... 16S 15 150 \
-  /path/gg_16s_13.5.fa 24 --export-as-single
-```
-
-#### Why You Might Need This
-
-##### Scenario A: Long Amplicon + Paired-End Mismatch
-- **Situation**: Your targeted 16S region (e.g., V3-V4) is naturally longer than the combined read length allows for overlap
-- **Example**: 150 bp forward + 150 bp reverse = 300 bp total, but V3-V4 is ~420 bp
-- **Result**: VSEARCH mergepairs drops **99.9% of reads** with error "too few kmers found on same diagonal"
-- **Solution**: Use `--export-as-single` to process only forward reads
-
-##### Scenario B: Poor Reverse Read Quality
-- **Situation**: Reverse reads have extremely high error rates due to sequencing issues
-- **Result**: PE merging succeeds but produces garbage sequences; OTU table inflated with artifacts
-- **Solution**: Use `--export-as-single` to discard low-quality reverse reads
-
-#### How It Works Bioinformatically
-
-**Without flag (standard paired-end):**
-```
-Forward reads (_1.fastq)  ─┐
-                           ├─→ VSEARCH mergepairs ─→ Merged reads
-Reverse reads (_2.fastq)  ─┘
-                               (99.9% dropout if no overlap)
-```
-
-**With --export-as-single flag:**
-```
-Forward reads (_1.fastq) ──→ Process as single-end only ✓
-Reverse reads (_2.fastq) ──→ IGNORED (data discarded safely)
-```
-
-#### Critical Biological Point
-
-When you use `--export-as-single`, the pipeline:
-1. **Ignores reverse reads completely** – no attempt to merge or process them
-2. **Processes only forward (_1) reads** – maintains single-strand orientation
-3. **Prevents ghost ASVs** – reverse-complement sequences would inflate the OTU table if processed independently
-
-**Without this selective filtering**, processing both `_1` and `_2` as separate single-end reads would create:
-- Duplicate OTUs from reverse-complement sequences
-- ~2x inflation of your feature table
-- Biological interpretation errors
-
-#### Command Syntax
-
-**Paired-end (default, requires comma-separated params):**
-```bash
-yamas --export DIR 16S 13,13 150,150 classifier.fa 24
-```
-
-**Single-end fallback (requires flag + single integer params):**
-```bash
-yamas --export DIR 16S 13 150 classifier.fa 24 --export-as-single
-```
-
-#### Example Workflow
-
-```bash
-# Step 1: Download PRJEB30615 (V3-V4, long amplicon)
-yamas --download PRJEB30615 --type 16S --acc_list acc.txt
-
-# Step 2: First attempt with paired-end
-yamas --export /path/PRJEB30615-... 16S 15,15 150,150 \
-  /data/gg_16s_13.5.fa 24
-
-# >>> ERROR: Merging fails, 99.9% dropout detected <<<
-
-# Step 3: Fallback to single-end
-yamas --export /path/PRJEB30615-... 16S 15 150 \
-  /data/gg_16s_13.5.fa 24 --export-as-single
-
-# >>> SUCCESS: Process only forward reads, salvage dataset <<<
-```
+| Flag | Description |
+|------|-------------|
+| `--download <ACCESSIONS...>` | Download dataset(s) from SRA/ENA |
+| `--type <16S/18S/Shotgun>` | Type of sequencing data |
+| `--export <PATH> <TYPE> <TRIM> <TRUNC> <CLASSIFIER> <THREADS>` | Export 16S/18S analysis (OTU, taxonomy, tree) |
+| `--export-as-single` | Force single-end processing when PE merge fails (use with `--export`) |
+| `--as_single` | Treat paired-end reads as single-end at the download stage |
+| `--pathways <yes/no>` | Enable HUMAnN3 for pathway profiling (Shotgun only) |
+| `--clean` | Run KneadData for host removal and QC (Shotgun only) |
+| `--threads <N>` | Number of threads to use |
+| `--acc_list <FILE>` | Path to a file with one accession per line |
+| `--verbose` | Print detailed progress information |
+| `--continue_from_fastq <ID> <PATH> <TYPE>` | Continue processing from an existing FASTQ folder |
+| `--continue_from <ID> <PATH> <TYPE>` | Continue processing from an existing dataset folder |
+| `--config <FILE>` | Load configuration from a JSON file |
+| `--ready <OS_TYPE>` | Initialize the YaMAS environment (Ubuntu/CentOS) |
 
 ---
 
 ## Output Structure
 
-### Project Directory Hierarchy
-
-After downloading a dataset, YaMAS creates a timestamped project directory:
+After running YaMAS, the project folder will contain:
 
 ```
-<ACCESSION>-<DATE>_<TIME>/
+<PROJECT_ID>-<DATE>_<TIME>/
 │
 ├── sra/                      # Raw SRA files (from prefetch)
-├── fastq_raw/                # Original FASTQ files (demultiplexed, not processed)
-├── fastq_clean/              # Cleaned FASTQ (after KneadData, if --clean used)
-├── fastq/                    # Active FASTQ folder (symlink: points to raw or clean)
+├── fastq_raw/                # Original FASTQ files (before any QC or host removal)
+├── fastq_clean/              # Clean FASTQ files (after KneadData, if --clean is used)
+├── fastq/                    # Active FASTQ folder used for downstream steps
 │
-├── knead_out/                # KneadData logs & QC (if --clean used)
+├── knead_out/                # KneadData logs and QC reports (if --clean is set)
 │   ├── *_kneaddata.log
 │   ├── *.fastqc.html
 │   └── multiqc_report.html
 │
-├── qza/                      # Intermediate files for 16S/18S (can be deleted after export)
+├── qza/                      # Intermediate files for 16S/18S processing
 │   ├── trimmed/              # Quality-trimmed FASTQ files
 │   ├── derep.fasta           # Deduplicated sequences
 │   ├── denoised.fasta        # Denoised ASVs (UNOISE3 output)
@@ -499,202 +226,206 @@ After downloading a dataset, YaMAS creates a timestamped project directory:
 ├── vis/                      # QC visualization reports
 │   └── multiqc_report.html   # FastQC summary (read counts, qualities, lengths)
 │
-├── export/                   # Final analysis outputs (16S/18S only, created with --export)
-│   ├── otu.tsv / otu.csv     # OTU abundance table (rows=OTUs, cols=samples)
-│   ├── taxonomy.tsv / taxonomy.csv  # Taxonomy assignments with confidence
+├── export/                   # Final analysis outputs (16S/18S, created with --export)
+│   ├── otu.csv               # OTU abundance table (OTUs × samples)
+│   ├── taxonomy.csv          # Taxonomy assignments with confidence scores
 │   ├── tree.nwk              # Phylogenetic tree (Newick, midpoint-rooted)
 │   └── otu_padding.csv       # OTU table padded with tree-only tips
 │
 ├── metaphlan_results/        # Taxonomic profiles (Shotgun only)
-│   ├── *_profile.tsv         # MetaPHLAn taxonomic abundance
-│   └── merged_abundance.tsv  # Merged across all samples
+│   ├── *_profile.tsv
+│   └── merged_abundance.tsv
 │
 └── humann_results/           # Functional profiles (Shotgun only, if --pathways yes)
-    ├── *_pathabundance.tsv   # Pathway abundance per sample
-    ├── *_pathcoverage.tsv    # Pathway presence/absence
-    ├── *_pathabundance_stratified.tsv  # Abundance stratified by species
-    └── merged_pathways.tsv   # Merged pathway results
+    ├── *_pathabundance.tsv
+    ├── *_pathcoverage.tsv
+    ├── *_pathabundance_stratified.tsv
+    └── merged_pathways.tsv
 ```
 
-### File Lifecycle
+**Key output files:**
+- **16S/18S**: `export/otu.csv`, `export/taxonomy.csv`, `export/tree.nwk`, `vis/multiqc_report.html`
+- **Shotgun**: `metaphlan_results/merged_abundance.tsv`, `humann_results/merged_pathways.tsv` *(if `--pathways yes`)*
 
-| File/Folder | Created | Purpose | Persistent After Processing |
-|------------|---------|---------|-----|
-| `sra/` | Download | Raw SRA downloads | ✓ (can be deleted after fastq_raw/ created) |
-| `fastq_raw/` | Download | Original demultiplexed reads | ❌ Deleted after `--clean` (if used) |
-| `fastq_clean/` | Download + `--clean` | Host-removed reads | ❌ Deleted after analysis (only fastq/ symlink kept) |
-| `fastq/` | Download | Active processing source | ✓ Symlink only (data elsewhere) |
-| `knead_out/` | Download + `--clean` | QC logs | ✓ (optional reference) |
-| `qza/` | Download | Processing intermediates | ❌ Can be safely deleted after export |
-| `vis/` | Download | QC HTML reports | ✓ (for review) |
-| `export/` | `--export` (16S/18S) | Final OTU/taxonomy/tree | ✓ Primary output |
-| `metaphlan_results/` | Download (Shotgun) | Taxonomy tables | ✓ Primary output |
-| `humann_results/` | Download + `--pathways yes` | Pathway analysis | ✓ Primary output |
+---
 
-### Key Output Files by Analysis Type
+## Downloading a project
 
-**16S/18S Analysis (after `--export`):**
-- `export/otu.csv` – OTU abundance (feature × sample matrix)
-- `export/taxonomy.csv` – Taxon assignments with confidence scores
-- `export/tree.nwk` – Rooted phylogenetic tree
-- `vis/multiqc_report.html` – QC summary
+To download a project from **NCBI SRA** or **ENA**, use one of the following templates:
 
-**Shotgun Analysis (automatic):**
-- `metaphlan_results/merged_abundance.tsv` – Taxonomic composition
-- `humann_results/merged_pathways.tsv` – Functional pathways (if `--pathways yes`)
-- `vis/multiqc_report.html` – QC summary
-- `knead_out/multiqc_report.html` – Host-removal stats (if `--clean`)
+### Download from NCBI SRA
+
+```bash
+yamas --download <dataset_id> --type <data_type> --pathways <pathways>
+```
+
+Arguments:
+- `dataset_id`: the accession ID from NCBI SRA. For example: `PRJEB01234` or `SRR11415443`
+- `data_type`: choose one of: `16S` / `18S` / `Shotgun`
+- `pathways`: generate HUMAnN3 pathway tables (Shotgun only). Choose: `yes` / `no`
+
+To download multiple accessions using a list file:
+```bash
+yamas --download --type 16S --acc_list /path/to/accessions.txt --verbose
+```
+
+### Continue data downloading
+
+1. Continue from **after** SRA download, **before** FASTQ conversion:
+```bash
+yamas --continue_from_fastq <dataset_id> <project_path> <data_type> --pathways <pathways>
+```
+
+Arguments:
+- `dataset_id`: the accession ID. For example: `PRJEB01234`
+- `project_path`: path to the existing project directory created by YaMAS
+- `data_type`: choose one of: `16S` / `18S` / `Shotgun`
+- `pathways`: choose: `yes` / `no`
+
+2. Continue from **after** FASTQ conversion (skip download and SRA conversion):
+```bash
+yamas --continue_from <dataset_id> <project_path> <data_type> --pathways <pathways>
+```
+
+Arguments:
+- `dataset_id`: the accession ID. For example: `PRJEB01234`
+- `project_path`: path to the existing project directory created by YaMAS
+- `data_type`: choose one of: `16S` / `18S` / `Shotgun`
+- `pathways`: choose: `yes` / `no`
+
+### Download from ENA
+
+```bash
+yamas --qiita <preprocessed_fastq_path> <metadata_path> <data_type>
+```
+
+Arguments:
+- `preprocessed_fastq_path`: path to the preprocessed FASTQ file. Rename the file to `forward.fastq.gz`
+- `metadata_path`: path to the metadata file. Rename the file to `metadata.tsv`
+- `data_type`: choose one of: `16S` / `18S`
+
+The output will be created in the same folder as the FASTQ and metadata files; it is recommended to organise inputs in a dedicated directory.
+
+### Download using fastq files
+
+```bash
+yamas --fastq <preprocessed_fastq_path> <barcode_path> <metadata_path> <data_type>
+```
+
+Arguments:
+- `preprocessed_fastq_path`: path to the preprocessed FASTQ file, renamed to `preprocessed_fastq.gz`
+- `barcode_path`: path to the barcode file, renamed to `barcodes.fastq.gz`
+- `metadata_path`: path to the metadata TSV file (must contain a `barcode` column), renamed to `metadata.tsv`
+- `data_type`: choose one of: `16S` / `18S` / `Shotgun`
+
+---
+
+## Exporting a project (only for 16S/18S)
+
+After downloading a 16S/18S dataset, run `--export` to produce the OTU table, taxonomy assignments, and phylogenetic tree.
+
+#### Paired-end (reads successfully merge)
+
+```bash
+yamas --export <project_path> <data_type> <trim_fwd>,<trim_rev> <trunc_fwd>,<trunc_rev> <classifier_file> <threads>
+```
+
+> Example: `yamas --export /PATH/PRJNA633959-30-09-2025_17-55-54 16S 13,13 175,175 $DB_ROOT/16S_classifiers/gg_16s_13.5.fa 24`
+
+#### Single-end, or paired-end fallback with `--export-as-single`
+
+```bash
+yamas --export <project_path> <data_type> <trim> <trunc> <classifier_file> <threads> --export-as-single
+```
+
+> Example: `yamas --export /PATH/PRJNA633959-30-09-2025_17-55-54 16S 13 175 $DB_ROOT/16S_classifiers/gg_16s_13.5.fa 24 --export-as-single`
+
+| Argument | Format | Description |
+|----------|--------|-------------|
+| `project_path` | string | Path to the project directory created by YaMAS |
+| `data_type` | `16S` \| `18S` | Analysis type |
+| `trim` | `"13,13"` (PE) or `"13"` (SE/fallback) | Bases to remove from the 5′ end of each read |
+| `trunc` | `"175,175"` (PE) or `"175"` (SE/fallback) | Final read length after truncation |
+| `classifier_file` | path | Path to the VSEARCH SINTAX-compatible FASTA reference database |
+| `threads` | int | Number of CPU threads (default: 12) |
+| `--export-as-single` | flag | Process only forward reads — see below |
+
+### The `--export-as-single` Flag
+
+By default, YaMAS attempts to **merge Paired-End (PE) reads** using VSEARCH. This is optimal when forward and reverse reads overlap sufficiently. Two scenarios require the single-end fallback:
+
+**Scenario 1: Long Amplicon + Short Read Length**
+
+> Example: The V3-V4 16S region is ~420 bp, but 150 bp PE reads produce only 300 bp combined — no physical overlap is possible.
+>
+> Result: VSEARCH `mergepairs` drops **99.9% of reads** with the error `"too few kmers found on same diagonal"`, making the dataset unusable.
+>
+> Solution: Use `--export-as-single` to process forward reads only.
+
+**Scenario 2: Poor Reverse Read Quality**
+
+> Reverse reads have high error rates due to sequencing issues. PE merging may "succeed" but produces degraded consensus sequences that inflate the OTU table with artifacts.
+>
+> Solution: Use `--export-as-single` to discard the low-quality reverse reads entirely.
+
+**What `--export-as-single` does:**
+
+1. **Ignores reverse reads completely** – R2 FASTQ files (`_2.fastq`) are not processed
+2. **Processes only forward reads** – `_1.fastq` files are retained in canonical orientation
+3. **Prevents OTU table inflation** – processing `_1` and `_2` independently without this flag would generate reverse-complement duplicates, inflating the feature table by ~2×
+
+**Decision tree:**
+
+```
+Do you have both _1 and _2 FASTQ files?
+├─ YES, and PE merge succeeds?            → Use comma-separated params (default PE mode)
+├─ YES, but 99%+ reads dropped at merge? → Add --export-as-single flag
+├─ YES, but R2 quality is very poor?      → Add --export-as-single flag
+└─ NO (native single-end data)?           → Use single integers (no flag needed)
+```
 
 ---
 
 ## Troubleshooting
 
-### Error: "missing 5 arguments"
+**Error: `"missing 5 arguments"`**
+> Cause: Paired-end data detected but single-integer trim/trunc values passed without `--export-as-single`.
+> ```bash
+> # Paired-end (comma-separated):
+> yamas --export DIR 16S 15,15 150,150 classifier.fa 24
+>
+> # Single-end fallback:
+> yamas --export DIR 16S 15 150 classifier.fa 24 --export-as-single
+> ```
 
-**Cause**: Paired-end data, but single integers passed without `--export-as-single` flag.
+**Error: `"too few kmers found on same diagonal"` (99.9% read dropout)**
+> Cause: Amplicon is too long for the PE reads to overlap.
+> Fix: Use `--export-as-single` to process forward reads only.
 
-**Fix**:
-```bash
-# WRONG (causes error):
-yamas --export DIR 16S 15 150 classifier.fa 24
+**Error: `"Reference database not found at..."`**
+> Cause: The classifier FASTA path is incorrect.
+> Fix: Verify the file exists: `ls -lh $DB_ROOT/16S_classifiers/gg_16s_13.5.fa`
 
-# RIGHT (paired-end):
-yamas --export DIR 16S 15,15 150,150 classifier.fa 24
+**Very few OTUs / empty `taxonomy.csv`**
+> Status: Fixed in the current version. The prevalence filter is now capped to the actual number of samples, preventing all OTUs from being removed in small or single-sample datasets.
 
-# RIGHT (single-end fallback):
-yamas --export DIR 16S 15 150 classifier.fa 24 --export-as-single
-```
-
----
-
-### Error: "Reference database not found at..."
-
-**Cause**: Classifier file doesn't exist or path is wrong.
-
-**Fix**: Verify FASTA reference database exists:
-```bash
-ls -lh /path/gg_16s_13.5.fa
-```
-
-Ensure it's formatted for VSEARCH --sintax (FASTA with proper headers).
-
----
-
-### Error: "too few kmers found on same diagonal" (99.9% dropout during merge)
-
-**Cause**: Amplicon too long; PE reads don't overlap.
-
-**Fix**: Use the `--export-as-single` flag:
-```bash
-yamas --export DIR 16S 15 150 classifier.fa 24 --export-as-single
-```
+**MultiQC report shows very low read counts after trimming**
+> Cause: Trim/trunc parameters are too aggressive.
+> Fix: Relax the `trunc` cutoff (e.g., increase from `150` to `175`):
+> ```bash
+> yamas --export DIR 16S 13 175 classifier.fa 24 --export-as-single
+> ```
 
 ---
 
-### Very few OTUs / Empty taxonomy.csv
+## Arguments and configurations
 
-**Cause**: Over-aggressive filtering (min_samples=3 removed all OTUs in single-sample datasets).
-
-**Status**: FIXED in current version. Filter is now capped to the number of actual samples.
-
----
-
-### MultiQC report shows very low read counts after trimming
-
-**Cause**: Trim/trunc parameters too strict.
-
-**Solution**: Adjust parameters (especially `trunc` / read length cutoff):
-```bash
-# More permissive:
-yamas --export DIR 16S 13 175 classifier.fa 24 --export-as-single
-```
+1. **config**: You can provide a configuration file (`--config <file>`) to save data to a different folder and adjust other pipeline settings.
+2. **verbose**: Use `--verbose` to print detailed progress during download and export operations (highly recommended).
+3. **Multiple accessions**: Listing more than one project ID, or providing `--acc_list`, will download them one by one into separate timestamped folders.
 
 ---
 
-## Pipeline Architecture
+## Cite us
 
-### Stage 0: Download & SRA Conversion
-- `prefetch` downloads `.sra` files
-- `fasterq-dump --split-files` converts to paired FASTQ
-
-### Stage 1: Demultiplexing & QC
-- **EMP format**: Pure Python streaming (barcode + sequence files in lockstep)
-- **Qiita format**: Inline barcode extraction + cutadapt trim
-- **Manifest format**: Direct FASTQ import
-- **QC**: FastQC + MultiQC for HTML reports
-
-### Stage 2: Trimming
-- `cutadapt` removes `trim` bases from 5' end, truncates to `trunc` bp
-
-### Stage 3: Denoising & Clustering
-- `vsearch --fastq_mergepairs` (PE only, skipped with `--export-as-single`)
-- `vsearch --fastq_filter` (quality filtering)
-- `vsearch --derep_fulllength` (dereplication)
-- `vsearch --cluster_unoise` (UNOISE3 denoising; ASV detection)
-- `vsearch --uchime3_denovo` (de novo chimera removal)
-- `vsearch --cluster_size` (99% clustering into OTUs)
-
-### Stage 4: Taxonomy
-- `vsearch --sintax` with reference FASTA (0.8 confidence cutoff)
-
-### Stage 5: Filtering
-- Remove mitochondria/chloroplast by taxonomic name
-- Filter by prevalence (min 3 samples or fewer if SE)
-- Filter by abundance (min 10 total counts)
-
-### Stage 6: Export
-- TSV→CSV conversion for OTU and taxonomy tables
-
-### Stage 7: Phylogeny
-- `mafft --auto` (multiple sequence alignment)
-- `FastTree -gtr -nt` (GTR model phylogenetic tree)
-- BioPython `root_at_midpoint()` (midpoint rooting)
-- Padding to include tree tips not in OTU table
-
----
-
-## Algorithmic Equivalence to QIIME2 Pipeline
-
-| Step | Old (QIIME2) | New (Standalone) | Equivalence |
-|------|-------------|-----------------|------------|
-| Denoising | DADA2 (error model) | UNOISE3 (fixed threshold) | ✓ High concordance |
-| Taxonomy | sklearn Naive Bayes | VSEARCH SINTAX | ✓ Comparable accuracy |
-| Chimera | DADA2 consensus | UCHIME3 de novo | ✓ Equivalent |
-| Alignment | MAFFT via QIIME2 | Direct MAFFT | ✓ Identical |
-| Tree | FastTree via QIIME2 | Direct FastTree | ✓ Identical |
-| Rooting | skbio midpoint-root | BioPython midpoint-root | ✓ Identical |
-
-**Key Difference**: DADA2 learns per-sample error models; UNOISE3 uses fixed alpha threshold (2.0). For most well-sequenced datasets, results are indistinguishable.
-
----
-
-## Citation
-
-If you use YaMAS in your research, please cite:
-
-```
-YaMAS: YOLO Microbiome Analysis System (Updated)
-https://github.com/[your-repo]
-VSEARCH: Rognes T, et al. VSEARCH: a versatile open source tool for metagenomics. PeerJ 2016
-SINTAX: Edgar R. SINTAX, a simple non-Bayesian taxonomy classifier for 16S and ITS sequences
-FastTree: Price MN, et al. FastTree 2. PLoS ONE 2010
-```
-
----
-
-## License
-
-MIT License – see LICENSE file for details.
-
----
-
-## Support & Issues
-
-For bugs, feature requests, or questions:
-- Check the [Troubleshooting](#troubleshooting) section
-- Review the [Algorithmic Equivalence](#algorithmic-equivalence-to-qiime2-pipeline) table
-- Create an issue on GitHub with:
-  - Error message (full traceback)
-  - Command used
-  - Output directory structure
-  - Log file (if available)
+If you are using our package, YaMAS for **any** purpose, please cite us; Shtossel Oshrit, Sondra Turjeman, Alona Riumin, Michael R. Goldberg, Arnon Elizur, Yarin Bekor, Hadar Mor, Omry Koren, and Yoram Louzoun. "Recipient-independent, high-accuracy FMT-response prediction and optimization in mice and humans." Microbiome 11, no. 1 (2023): 181. https://link.springer.com/article/10.1186/s40168-023-01623-w
