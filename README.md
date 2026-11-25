@@ -247,6 +247,13 @@ After running YaMAS, the project folder will contain:
 - **16S/18S**: `export/otu.csv`, `export/taxonomy.csv`, `export/tree.nwk`, `vis/multiqc_report.html`
 - **Shotgun**: `metaphlan_results/merged_abundance.tsv`, `humann_results/merged_pathways.tsv` *(if `--pathways yes`)*
 
+**Shotgun read counts (estimated):** next to the relative-abundance (%) table, the Shotgun flow also writes MetaPhlAn's estimated number of reads per clade:
+- `export/<PROJECT_ID>_final_counts.txt` and `export/<PROJECT_ID>_final_counts_table.csv` – same layout as `export/<PROJECT_ID>_final.txt` and `export/<PROJECT_ID>_final_table.csv`, with estimated read counts instead of %
+- `export/<PROJECT_ID>_reads_summary.csv` – per sample: reads processed and reads mapped to known clades
+- `qza/<sample>_readstats.txt` – per-sample MetaPhlAn output made with `-t rel_ab_w_read_stats`
+
+The counts come from a second MetaPhlAn pass over the mapping file saved by the first run (`fastq/<sample>.bowtie2.bz2`), so the slow alignment step is not repeated. They are MetaPhlAn's estimates (`estimated_number_of_reads_from_the_clade`), not exact per-taxon read counts. The existing % outputs and the HUMAnN input are unchanged.
+
 ---
 
 ## Downloading a project

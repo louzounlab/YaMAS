@@ -16,6 +16,7 @@ from .generate_pathways import run_humann_pipeline
 from pathlib import Path
 
 from .generate_dehost import run_dehost_pipeline  
+from .shotgun_counts import add_read_counts
 from typing import Union
 
 CONDA_PREFIX = os.environ.get("CONDA_PREFIX", None)
@@ -210,6 +211,9 @@ def metaphlan_extraction(reads_data, dataset_id, threads=8):
     if profile_files:
         with open(final_output_path, 'w') as out:
             merge(profile_files, out, False)
+
+    # Added: estimated read counts next to the % table (see shotgun_counts.py)
+    add_read_counts(reads_data.dir_path, dataset_id, threads, target_index, db_param)
 
 def metaphlan_txt_csv(reads_data, dataset_id):
     export_path = os.path.join(reads_data.dir_path, "export")
